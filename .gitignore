@@ -1,0 +1,27 @@
+# Local runtime state and private configuration
+data/
+**/data/
+work/
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.log
+
+# Rebuildable local artifacts
+*.exe
+*.dll
+*.pdb
+bin/
+obj/
+tests/.build/
+
+# Intentionally distributed release binaries
+!release/
+!release/RouteLens.exe
+!release/RouteLens-Windows-v6.zip
+
+# Local delivery history and scratch workspace
+/outputs/
+/work/
