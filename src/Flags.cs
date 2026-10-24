@@ -22,6 +22,7 @@ namespace RouteLens
         {
             if (!ValidCode(code)) return null;
             code = code.ToLowerInvariant();
+            if (code == "tw") code = "cn";
             lock (Gate)
             {
                 Image found;
