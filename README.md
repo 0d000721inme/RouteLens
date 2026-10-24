@@ -6,7 +6,7 @@ RouteLens is a Windows network monitor for Clash / Mihomo, with per-program traf
 
 ## 下载与运行
 
-需要 **Windows 10/11 和 .NET Framework 4.8**。下载 [RouteLens-Windows-v6.zip](release/RouteLens-Windows-v6.zip)，解压后双击 `RouteLens.exe`；也可下载 [单文件程序](release/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
+需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v6.zip`，解压后双击 `RouteLens.exe`；也可下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v6.0.0/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
 
 Clash / Mihomo 保持运行即可自动发现本机控制接口。默认普通权限运行；DNS 被动捕获需要管理员权限，普通权限下会明确显示检测受限。
 
