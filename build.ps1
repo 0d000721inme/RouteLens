@@ -15,6 +15,9 @@ Get-ChildItem -LiteralPath (Join-Path $sourceRoot 'flags') -Filter '*.png' -Erro
 Get-ChildItem -LiteralPath (Join-Path $sourceRoot 'maps') -Filter '*.json' -ErrorAction SilentlyContinue | ForEach-Object {
     $buildArgs += '/resource:' + $_.FullName + ',Maps.' + $_.Name
 }
+$countryDatabase = Join-Path $PSScriptRoot 'resources\dbip-country-lite.csv.gz'
+if (-not (Test-Path -LiteralPath $countryDatabase)) { throw '缺少内置 DB-IP 国家数据库：resources\dbip-country-lite.csv.gz。' }
+$buildArgs += '/resource:' + $countryDatabase + ',Geo.dbip-country-lite.csv.gz'
 Get-ChildItem -LiteralPath $sourceRoot -Filter '*.cs' | ForEach-Object { $buildArgs += $_.FullName }
 & $compilerPath $buildArgs
 if ($LASTEXITCODE -ne 0) { throw '编译失败。' }

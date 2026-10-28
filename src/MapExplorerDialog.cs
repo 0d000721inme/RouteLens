@@ -60,12 +60,23 @@ namespace RouteLens
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
             Controls.Add(root);
 
-            Panel heading = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
+            TableLayoutPanel heading = new TableLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0), ColumnCount = 2, RowCount = 1 };
+            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
+            heading.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            Panel headingText = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
             Label title = new Label { Text = "世界地图与国家详情", Dock = DockStyle.Top, Height = 38,
                 Font = UiPalette.Body(20), ForeColor = UiPalette.Ink, AutoEllipsis = true };
-            Label subtitle = new Label { Text = "选择国家，查看哪些程序和域名正在建立连接。", Dock = DockStyle.Bottom, Height = 31,
+            Label subtitle = new Label { Text = "选择国家查看详情 · 滚轮缩放，拖动地图", Dock = DockStyle.Bottom, Height = 31,
                 Font = UiPalette.Body(9.5f), ForeColor = UiPalette.Muted, AutoEllipsis = true };
-            heading.Controls.Add(title); heading.Controls.Add(subtitle); root.Controls.Add(heading, 0, 0);
+            headingText.Controls.Add(title); headingText.Controls.Add(subtitle); heading.Controls.Add(headingText, 0, 0);
+            FlowLayoutPanel zoomBar = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0), Padding = new Padding(0, 10, 0, 0), FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+            ModernButton zoomOut = new ModernButton { Text = "−", Width = 42, Height = 38, Margin = new Padding(0, 0, 5, 0), Font = UiPalette.Body(12), AccessibleName = "缩小地图" };
+            Label zoomLevel = MakeLabel("100%", 9f, UiPalette.Muted); zoomLevel.Dock = DockStyle.None; zoomLevel.Size = new Size(52, 38); zoomLevel.TextAlign = ContentAlignment.MiddleCenter; zoomLevel.AccessibleName = "地图缩放比例";
+            ModernButton zoomIn = new ModernButton { Text = "+", Width = 42, Height = 38, Margin = new Padding(5, 0, 6, 0), Font = UiPalette.Body(12), AccessibleName = "放大地图" };
+            ModernButton zoomReset = new ModernButton { Text = "重置", Width = 76, Height = 38, Margin = new Padding(0), AccessibleName = "重置地图缩放与位置" };
+            zoomOut.Click += delegate { _map.ZoomOut(); }; zoomIn.Click += delegate { _map.ZoomIn(); }; zoomReset.Click += delegate { _map.ResetZoom(); };
+            zoomBar.Controls.Add(zoomOut); zoomBar.Controls.Add(zoomLevel); zoomBar.Controls.Add(zoomIn); zoomBar.Controls.Add(zoomReset);
+            heading.Controls.Add(zoomBar, 1, 0); root.Controls.Add(heading, 0, 0);
 
             TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0), Padding = new Padding(0),
                 ColumnCount = 2, RowCount = 1 };
@@ -76,6 +87,8 @@ namespace RouteLens
             RoundedPanel mapCard = new RoundedPanel { Dock = DockStyle.Fill, Padding = new Padding(3), Margin = new Padding(0, 0, 14, 0) };
             _map = new WorldMapControl { Dock = DockStyle.Fill, ShowExpandButton = false, TabIndex = 0 };
             _map.CountrySelected += SetCountry;
+            Action<float> updateZoom = delegate(float zoom) { zoomLevel.Text = (zoom * 100f).ToString("0") + "%"; zoomOut.Enabled = zoom > 1.001f; zoomReset.Enabled = zoom > 1.001f; zoomIn.Enabled = zoom < 7.999f; };
+            _map.ZoomChanged += updateZoom; updateZoom(_map.ZoomFactor);
             mapCard.Controls.Add(_map); content.Controls.Add(mapCard, 0, 0);
 
             RoundedPanel detailCard = new RoundedPanel { Dock = DockStyle.Fill, Margin = new Padding(0), Padding = new Padding(17) };
@@ -172,6 +185,7 @@ namespace RouteLens
         {
             if (_syncing) return;
             _selectedCode = NormalizeCode(code);
+            if (_selectedCode != null) _map.CenterOnCountry(_selectedCode);
             if (_selectCountry != null) _selectCountry(_selectedCode);
             RefreshSnapshot();
         }

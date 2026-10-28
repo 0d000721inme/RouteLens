@@ -44,12 +44,12 @@ namespace RouteLens
 
         private static readonly object MapGate = new object();
         private static Dictionary<string, MapCountry> SharedMap;
-        private static readonly Color LandColor = Color.FromArgb(238, 243, 240);
-        private static readonly Color CoastColor = Color.FromArgb(204, 218, 211);
-        private static readonly Color GridColor = Color.FromArgb(239, 244, 241);
-        private static readonly Color ActiveLandColor = Color.FromArgb(205, 229, 216);
-        private static readonly Color SelectedLandColor = Color.FromArgb(170, 213, 191);
-        private static readonly Color QuietTextColor = Color.FromArgb(94, 116, 105);
+        private static readonly Color LandColor = Color.FromArgb(238, 244, 250);
+        private static readonly Color CoastColor = Color.FromArgb(199, 215, 230);
+        private static readonly Color GridColor = Color.FromArgb(239, 244, 249);
+        private static readonly Color ActiveLandColor = Color.FromArgb(204, 225, 247);
+        private static readonly Color SelectedLandColor = Color.FromArgb(165, 204, 242);
+        private static readonly Color QuietTextColor = Color.FromArgb(91, 106, 127);
         private const float North = 85f;
         private const float South = -60f;
         private readonly Font _titleFont = UiPalette.Body(10f);
@@ -75,6 +75,11 @@ namespace RouteLens
         private bool _keyboardMode;
         private Point? _pointerLocation;
         private bool _showExpandButton = true;
+        private float _zoom = 1f, _centerX = .5f, _centerY = .5f;
+        private string _focusCountryCode;
+        private bool _panning, _panMoved, _suppressClick;
+        private Point _panStart;
+        private float _panStartX, _panStartY;
 
         public WorldMapControl()
         {
@@ -98,6 +103,58 @@ namespace RouteLens
 
         public event Action<string> CountrySelected;
         public event Action ExpandRequested;
+        public event Action<float> ZoomChanged;
+
+        public float ZoomFactor { get { return _zoom; } }
+
+        public void ZoomIn() { ChangeZoom(_zoom * 1.5f, null, true); }
+        public void ZoomOut() { ChangeZoom(_zoom / 1.5f, null, false); }
+        public void ResetZoom() { _centerX = .5f; _centerY = .5f; ChangeZoom(1f, null, false); }
+        public void CenterOnCountry(string code)
+        {
+            MapCountry country;
+            if (String.IsNullOrWhiteSpace(code) || !SharedMap.TryGetValue(code, out country) || !IsMapPosition(country.Longitude, country.Latitude)) return;
+            float oldX = _centerX, oldY = _centerY;
+            _centerX = (country.Longitude + 180f) / 360f;
+            _centerY = (North - country.Latitude) / (North - South);
+            ClampCenter();
+            if (Math.Abs(_centerX - oldX) < .0001f && Math.Abs(_centerY - oldY) < .0001f) return;
+            ClearProjection(); Invalidate();
+        }
+
+        private void ChangeZoom(float requested, Point? anchor, bool centerSelected)
+        {
+            float next = Math.Max(1f, Math.Min(8f, requested));
+            float old = _zoom, oldCenterX = _centerX, oldCenterY = _centerY;
+            if (centerSelected && _selectedCode != null)
+            {
+                MapCountry selected;
+                if (SharedMap.TryGetValue(_selectedCode, out selected) && IsMapPosition(selected.Longitude, selected.Latitude))
+                {
+                    _centerX = (selected.Longitude + 180f) / 360f;
+                    _centerY = (North - selected.Latitude) / (North - South);
+                }
+            }
+            else if (anchor.HasValue && _mapBounds.Width > 0 && _mapBounds.Height > 0)
+            {
+                float x = (anchor.Value.X - (_mapBounds.Left + _mapBounds.Width / 2f)) / _mapBounds.Width;
+                float y = (anchor.Value.Y - (_mapBounds.Top + _mapBounds.Height / 2f)) / _mapBounds.Height;
+                _centerX += x / old - x / next;
+                _centerY += y / old - y / next;
+            }
+            _zoom = next;
+            ClampCenter();
+            if (Math.Abs(old - _zoom) < .0001f && Math.Abs(oldCenterX - _centerX) < .0001f && Math.Abs(oldCenterY - _centerY) < .0001f) return;
+            ClearProjection(); Invalidate();
+            Action<float> handler = ZoomChanged; if (handler != null) handler(_zoom);
+        }
+
+        private void ClampCenter()
+        {
+            float half = .5f / _zoom;
+            _centerX = Math.Max(half, Math.Min(1f - half, _centerX));
+            _centerY = Math.Max(half, Math.Min(1f - half, _centerY));
+        }
 
         public bool ShowExpandButton
         {
@@ -109,7 +166,7 @@ namespace RouteLens
 
         public void SetData(List<CountryStat> countries, int total, int unknown, string selectedCode)
         {
-            string focusCode = _focusIndex >= 0 && _focusIndex < _markers.Count ? _markers[_focusIndex].Country.Code : null;
+            string focusCode = _focusIndex >= 0 && _focusIndex < _markers.Count ? _markers[_focusIndex].Country.Code : _focusCountryCode;
             List<CountryStat> next = new List<CountryStat>();
             Dictionary<string, CountryStat> nextCodes = new Dictionary<string, CountryStat>(StringComparer.OrdinalIgnoreCase);
             if (countries != null)
@@ -150,17 +207,10 @@ namespace RouteLens
                 else _unmappedCount += item.Count;
             }
             _focusIndex = 0;
+            _focusCountryCode = focusCode;
             _markersDirty = true;
             _hoverIndex = -1;
-            // Preserve the country under keyboard focus when a live snapshot reorders counts.
-            if (focusCode != null)
-                for (int i = 0, mappedIndex = 0; i < _countries.Count; i++)
-                {
-                    MapCountry shape;
-                    if (!SharedMap.TryGetValue(_countries[i].Code, out shape) || !IsMapPosition(shape.Longitude, shape.Latitude)) continue;
-                    if (_countries[i].Code == focusCode) _focusIndex = mappedIndex;
-                    mappedIndex++;
-                }
+            // Restore keyboard focus by country code after visible markers are rebuilt.
             _markers.Clear();
             UpdateAccessibility();
             Invalidate();
@@ -179,19 +229,22 @@ namespace RouteLens
             GraphicsState state = graphics.Save();
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             graphics.SetClip(_mapBounds, CombineMode.Intersect);
-            foreach (MapMarker marker in _markers)
+            foreach (CountryStat countryStat in _countries)
             {
                 ProjectedCountry country;
-                if (!_byCode.TryGetValue(marker.Country.Code, out country)) continue;
-                bool selected = marker.Country.Code == _selectedCode;
+                if (!_byCode.TryGetValue(countryStat.Code, out country) || !IsMapPosition(country.Source.Longitude, country.Source.Latitude)) continue;
+                bool selected = countryStat.Code == _selectedCode;
                 using (Brush brush = new SolidBrush(selected ? SelectedLandColor : ActiveLandColor)) graphics.FillPath(brush, country.Path);
-                using (Pen pen = new Pen(selected ? Color.FromArgb(92, 157, 125) : Color.FromArgb(159, 195, 176), Math.Max(.65f, .7f * scale)))
+                using (Pen pen = new Pen(selected ? Color.FromArgb(76, 134, 194) : Color.FromArgb(150, 188, 220), Math.Max(.65f, .7f * scale)))
                     graphics.DrawPath(pen, country.Path);
             }
             graphics.Restore(state);
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             // Draw the least prominent marks first so the largest country counts stay legible.
+            state = graphics.Save();
+            graphics.SetClip(_mapBounds, CombineMode.Intersect);
             for (int i = _markers.Count - 1; i >= 0; i--) DrawMarker(graphics, _markers[i], i, scale);
+            graphics.Restore(state);
             DrawHeading(graphics, scale);
             DrawFooter(graphics, scale);
         }
@@ -202,8 +255,8 @@ namespace RouteLens
             int titleY = S(13, scale);
             UiPaint.DrawIcon(graphics, "globe", new Rectangle(inset, titleY + S(1, scale), S(18, scale), S(18, scale)), UiPalette.Accent, 1.5f);
             DrawText(graphics, "世界连接地图", _titleFont, new Rectangle(inset + S(27, scale), titleY, S(140, scale), S(22, scale)), UiPalette.Ink, TextFormatFlags.Left);
-            string status = _markers.Count.ToString("N0") + " 个国家 / 地区";
-            int statusWidth = S(135, scale);
+            string status = _zoom > 1f ? _countries.Count.ToString("N0") + " 个地区 · 视野内 " + _markers.Count.ToString("N0") : _countries.Count.ToString("N0") + " 个国家 / 地区";
+            int statusWidth = S(_zoom > 1f ? 205 : 135, scale);
             int expandWidth = _showExpandButton ? S(115, scale) : 0;
             int statusRight = Width - inset - expandWidth;
             if (statusRight - statusWidth >= inset + S(175, scale))
@@ -218,9 +271,9 @@ namespace RouteLens
             DrawText(graphics, caption, _bodyFont, new Rectangle(inset, titleY + S(25, scale), Math.Max(0, Width - inset * 2), S(19, scale)), QuietTextColor, TextFormatFlags.Left);
             if (SharedMap.Count == 0 || _markers.Count == 0)
             {
-                string empty = SharedMap.Count == 0 ? "地图数据未加载" : (_total == 0 ? "当前范围暂无可定位的公网目标" : (_unknown > 0 ? "等待国家识别，暂不放置连接标记" : "已识别目标暂缺国家代表点"));
+                string empty = SharedMap.Count == 0 ? "地图数据未加载" : (_mappedCount > 0 && _zoom > 1f ? "当前视野没有标记 · 拖动地图或重置" : (_total == 0 ? "当前范围暂无可定位的公网目标" : (_unknown > 0 ? "等待国家识别，暂不放置连接标记" : "已识别目标暂缺国家代表点")));
                 Rectangle badge = new Rectangle((Width - S(280, scale)) / 2, (int)_mapBounds.Y + (int)_mapBounds.Height / 2 - S(15, scale), S(280, scale), S(30, scale));
-                UiPaint.RoundRect(graphics, badge, S(8, scale), Color.FromArgb(245, 249, 247), Color.FromArgb(223, 233, 227));
+                UiPaint.RoundRect(graphics, badge, S(8, scale), Color.FromArgb(245, 249, 253), Color.FromArgb(220, 230, 241));
                 DrawText(graphics, empty, _bodyFont, Rectangle.Inflate(badge, -S(8, scale), 0), UiPalette.Muted, TextFormatFlags.HorizontalCenter);
             }
         }
@@ -283,7 +336,7 @@ namespace RouteLens
                 UiPaint.RoundRect(graphics, halo, halo.Height / 2f, Color.FromArgb(selected ? 40 : 25, UiPalette.Accent));
             }
             UiPaint.RoundRect(graphics, RectangleF.Inflate(bounds, 1.6f * scale, 1.6f * scale), bounds.Height / 2f + 1.6f * scale, Color.White);
-            UiPaint.RoundRect(graphics, bounds, bounds.Height / 2f, active ? Color.FromArgb(24, 100, 83) : UiPalette.Accent);
+            UiPaint.RoundRect(graphics, bounds, bounds.Height / 2f, active ? Color.FromArgb(20, 79, 155) : UiPalette.Accent);
             if (marker.HasCount)
                 DrawText(graphics, marker.Country.Count.ToString("N0"), _numberFont, Rectangle.Round(bounds), Color.White, TextFormatFlags.HorizontalCenter);
             if (focused)
@@ -372,6 +425,7 @@ namespace RouteLens
 
         private void BuildMarkers(float scale)
         {
+            string focusCode = _focusIndex >= 0 && _focusIndex < _markers.Count ? _markers[_focusIndex].Country.Code : _focusCountryCode;
             _markers.Clear();
             int maximum = _countries.Count > 0 ? _countries[0].Count : 1;
             foreach (CountryStat country in _countries)
@@ -379,6 +433,7 @@ namespace RouteLens
                 MapCountry shape;
                 if (!SharedMap.TryGetValue(country.Code, out shape) || !IsMapPosition(shape.Longitude, shape.Latitude)) continue;
                 PointF anchor = Project(shape.Longitude, shape.Latitude);
+                if (!_mapBounds.Contains(anchor)) continue;
                 bool hasCount = _markers.Count < 16 || country.Code == _selectedCode;
                 float height = hasCount ? (18f + Math.Min(4f, 4f * (float)Math.Sqrt((double)country.Count / maximum))) * scale : 7f * scale;
                 float width = hasCount ? Math.Max(height, (country.Count.ToString("N0").Length * 6.3f + 10f) * scale) : height;
@@ -390,6 +445,10 @@ namespace RouteLens
                 });
             }
             _focusIndex = Math.Max(0, Math.Min(_focusIndex, _markers.Count - 1));
+            if (focusCode != null)
+                for (int i = 0; i < _markers.Count; i++)
+                    if (String.Equals(_markers[i].Country.Code, focusCode, StringComparison.OrdinalIgnoreCase)) { _focusIndex = i; break; }
+            _focusCountryCode = focusCode;
             _markersDirty = false;
             RefreshHover(true);
             UpdateAccessibility();
@@ -427,8 +486,10 @@ namespace RouteLens
 
         private PointF Project(float longitude, float latitude)
         {
-            return new PointF(_mapBounds.X + (longitude + 180f) / 360f * _mapBounds.Width,
-                _mapBounds.Y + (North - latitude) / (North - South) * _mapBounds.Height);
+            float x = (longitude + 180f) / 360f;
+            float y = (North - latitude) / (North - South);
+            return new PointF(_mapBounds.X + (.5f + (x - _centerX) * _zoom) * _mapBounds.Width,
+                _mapBounds.Y + (.5f + (y - _centerY) * _zoom) * _mapBounds.Height);
         }
 
         private static bool IsMapPosition(float longitude, float latitude)
@@ -438,6 +499,7 @@ namespace RouteLens
 
         private int HitTest(Point point)
         {
+            if (!_mapBounds.Contains(point)) return -1;
             int closest = -1;
             float closestDistance = Single.MaxValue;
             float scale = _cacheDpi > 0 ? _cacheDpi / 96f : 1f;
@@ -461,7 +523,48 @@ namespace RouteLens
         {
             base.OnMouseMove(e);
             _pointerLocation = e.Location;
+            if (_panning)
+            {
+                float scale = _cacheDpi > 0 ? _cacheDpi / 96f : 1f;
+                int dx = e.X - _panStart.X, dy = e.Y - _panStart.Y;
+                if (!_panMoved && dx * dx + dy * dy >= 16f * scale * scale) _panMoved = true;
+                if (_panMoved && _mapBounds.Width > 0 && _mapBounds.Height > 0)
+                {
+                    float oldX = _centerX, oldY = _centerY;
+                    _centerX = _panStartX - dx / (_mapBounds.Width * _zoom);
+                    _centerY = _panStartY - dy / (_mapBounds.Height * _zoom);
+                    ClampCenter();
+                    if (Math.Abs(_centerX - oldX) > .0001f || Math.Abs(_centerY - oldY) > .0001f) { ClearProjection(); Invalidate(); }
+                }
+                Cursor = Cursors.Hand;
+                return;
+            }
             RefreshHover(false);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left) _suppressClick = false;
+            if (e.Button != MouseButtons.Left || _zoom <= 1f || !_mapBounds.Contains(e.Location)) return;
+            _panning = true; _panMoved = false; _panStart = e.Location; _panStartX = _centerX; _panStartY = _centerY; Capture = true;
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            if (_panning && e.Button == MouseButtons.Left)
+            {
+                _suppressClick = _panMoved; _panning = false; Capture = false;
+                Invalidate();
+            }
+            base.OnMouseUp(e);
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            if (_mapBounds.Contains(e.Location) && e.Delta != 0)
+                ChangeZoom(_zoom * (float)Math.Pow(1.25, e.Delta / 120f), e.Location, false);
         }
 
         private void RefreshHover(bool force)
@@ -490,19 +593,21 @@ namespace RouteLens
         protected override void OnMouseClick(MouseEventArgs e)
         {
             base.OnMouseClick(e);
+            if (_suppressClick) { _suppressClick = false; return; }
             if (e.Button != MouseButtons.Left) return;
             int index = HitTest(e.Location);
             if (index < 0) return;
             Focus();
             _keyboardMode = false;
             _focusIndex = index;
+            _focusCountryCode = _markers[index].Country.Code;
             SelectCountry(index);
         }
 
         protected override bool IsInputKey(Keys keyData)
         {
             Keys key = keyData & Keys.KeyCode;
-            return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || key == Keys.Home || key == Keys.End || base.IsInputKey(keyData);
+            return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || key == Keys.Home || key == Keys.End || key == Keys.Escape || base.IsInputKey(keyData);
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
@@ -513,12 +618,16 @@ namespace RouteLens
                 Action<string> handler = CountrySelected;
                 if (handler != null) handler(null);
             }
+            else if (e.KeyCode == Keys.Add || e.KeyCode == Keys.Oemplus) ZoomIn();
+            else if (e.KeyCode == Keys.Subtract || e.KeyCode == Keys.OemMinus) ZoomOut();
+            else if (e.KeyCode == Keys.D0 || e.KeyCode == Keys.NumPad0) ResetZoom();
             else if (_markers.Count == 0) return;
             else if (e.KeyCode == Keys.Home) _focusIndex = 0;
             else if (e.KeyCode == Keys.End) _focusIndex = _markers.Count - 1;
             else if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) MoveFocus(e.KeyCode);
             else if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) SelectCountry(_focusIndex);
             else return;
+            if (_focusIndex >= 0 && _focusIndex < _markers.Count) _focusCountryCode = _markers[_focusIndex].Country.Code;
             _keyboardMode = true;
             e.Handled = true;
             e.SuppressKeyPress = true;
@@ -563,7 +672,7 @@ namespace RouteLens
             string detail = "";
             if (_focusIndex >= 0 && _focusIndex < _markers.Count)
                 detail = "当前国家 " + _markers[_focusIndex].Country.Name + "，" + _markers[_focusIndex].Country.Count.ToString("N0") + " 条连接。";
-            AccessibleDescription = "公网目标 IP 的国家级分布，标记为国家代表点，不是 IP 精确位置。已定位 " + _mappedCount.ToString("N0") + " 条，共 " + _total.ToString("N0") + " 条。" + detail + "方向键选择国家，Enter 或空格筛选，同国再次选择或 Esc 清除。";
+            AccessibleDescription = "公网目标 IP 的国家级分布，标记为国家代表点，不是 IP 精确位置。已定位 " + _mappedCount.ToString("N0") + " 条，共 " + _total.ToString("N0") + " 条。地图缩放 " + (_zoom * 100f).ToString("0") + "% 。" + detail + "方向键选择国家，Enter 或空格筛选，同国再次选择或 Esc 清除。加减键缩放，数字 0 重置。";
         }
 
         private void ClearProjection()

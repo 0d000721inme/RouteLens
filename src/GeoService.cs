@@ -23,6 +23,7 @@ namespace RouteLens
         private readonly Timer egressTimer;
         private readonly string cacheFile;
         private readonly string budgetFile;
+        private readonly OfflineCountryDatabase offline;
         private volatile bool enabled = true;
         private volatile bool disposed;
         private int checking;
@@ -40,6 +41,7 @@ namespace RouteLens
             try { Directory.CreateDirectory(dataDirectory); Load(); }
             catch (Exception)
             { statusText = "缓存不可写，本次使用内存缓存"; }
+            offline = new OfflineCountryDatabase(dataDirectory);
             worker = new Thread(Work) { IsBackground = true, Name = "RouteLens country lookup" };
             worker.Start();
             egressTimer = new Timer(delegate { RefreshEgress(); }, null, 100, 30000);
@@ -66,9 +68,10 @@ namespace RouteLens
             }
         }
         public int PendingCount { get { lock (gate) return queued.Count; } }
+        public OfflineCountryDatabase Offline { get { return offline; } }
         public string StatusText
         {
-            get { lock (gate) return !enabled ? "联网查询已关闭 · 保留已缓存国家" : statusText; }
+            get { bool ready = offline.GetStatus().Ready; lock (gate) return (ready ? "离线国家库已启用 · " : "") + (!enabled ? "联网查询已关闭 · 保留已缓存国家" : statusText); }
         }
         public EgressResult Egress
         {
@@ -88,6 +91,8 @@ namespace RouteLens
         }
         private GeoResult PeekLocked(string ip)
         {
+            GeoResult local = offline.Find(ip);
+            if (local != null) return local;
             GeoResult result;
             if (ip != null && cache.TryGetValue(ip, out result)) return result;
             return new GeoResult { Ip = ip, Status = enabled ? "unknown" : "disabled" };
@@ -98,6 +103,8 @@ namespace RouteLens
             if (!IpScope.IsPublic(ip))
                 return new GeoResult { Ip = ip, Status = "local", CountryName = IpScope.Classify(ip) };
             ip = IPAddress.Parse(ip).ToString();
+            GeoResult local = offline.Find(ip);
+            if (local != null) return local;
             lock (gate)
             {
                 GeoResult found;
@@ -168,6 +175,16 @@ namespace RouteLens
                     }
                 }
                 if (ip == null) { if (WaitHandle.WaitAny(waits) == 0) return; continue; }
+                if (offline.Find(ip) != null)
+                {
+                    lock (gate)
+                    {
+                        queued.Remove(ip);
+                        GeoResult pending;
+                        if (cache.TryGetValue(ip, out pending) && pending.Status == "queued") cache.Remove(ip);
+                    }
+                    continue;
+                }
                 GeoResult result;
                 DateTime now = DateTime.UtcNow;
                 bool mayQuery;
@@ -313,6 +330,7 @@ namespace RouteLens
         {
             if (disposed) return;
             disposed = true;
+            offline.Dispose();
             egressTimer.Dispose();
             stop.Set(); wake.Set();
             // Requests are bounded by a timeout; background threads never hold the app open.

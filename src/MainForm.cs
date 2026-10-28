@@ -16,6 +16,8 @@ namespace RouteLens
         private readonly ClashConnectionReader _clash = new ClashConnectionReader();
         private readonly DnsLeakMonitor _dns = new DnsLeakMonitor();
         private readonly TrafficTracker _traffic = new TrafficTracker();
+        private readonly HistoryStore _history;
+        private readonly ActivityAlerts _alerts = new ActivityAlerts();
         private List<ConnectionInfo> _trafficConnections = new List<ConnectionInfo>();
         private MapExplorerSnapshot _mapSnapshot = new MapExplorerSnapshot { Countries = new List<CountryStat>(), Connections = new List<MapConnection>(), SourceUnavailable = true, SourceStatus = "正在读取连接" };
         private readonly Timer _sampleTimer = new Timer();
@@ -33,7 +35,7 @@ namespace RouteLens
         private CheckBox _publicOnly, _includeUdp, _online;
         private Button _pause, _refresh, _countryFilter, _detailsButton, _copyDetail;
         private Button _dnsStatusButton, _trafficButton;
-        private NotifyIcon _dnsNotification;
+        private NotifyIcon _dnsNotification, _activityNotification;
         private bool _dnsNotificationsEnabled = true;
         private DateTime _lastDnsNotificationAt = DateTime.MinValue;
         private Label _live, _exitCountry, _exitIp, _exitDetail, _counts, _status, _capture, _proxy, _empty;
@@ -58,7 +60,8 @@ namespace RouteLens
         public MainForm(GeoService geo)
         {
             if (geo == null) throw new ArgumentNullException("geo");
-            _geo = geo; Text = "RouteLens · 网络观察";
+            _geo = geo; _history = new HistoryStore(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data"));
+            _alerts.Alert += ShowActivityNotification; Text = "RouteLens · 网络观察";
             BackColor = UiPalette.Canvas; ForeColor = UiPalette.Ink; Font = UiPalette.Body(10);
             AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96f, 96f);
             FormBorderStyle = FormBorderStyle.None; ClientSize = new Size(1380, 900); MinimumSize = new Size(1040, 720);
@@ -96,18 +99,15 @@ namespace RouteLens
             Controls.Add(root); root.Controls.Add(BuildTitleBar(), 0, 0);
 
             TableLayoutPanel intro = Table(2);
-            intro.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); intro.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 408));
+            intro.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); intro.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 296));
             Panel titles = new Panel { Dock = DockStyle.Fill };
             Label title = LabelAt("网络概览", 21, FontStyle.Bold, UiPalette.Ink); title.SetBounds(0, 2, 400, 35);
             Label subtitle = LabelAt("查看程序访问的网站、分流规则与实际代理链", 9.5f, FontStyle.Regular, UiPalette.Muted); subtitle.SetBounds(1, 36, 530, 20);
             titles.Controls.AddRange(new Control[] { title, subtitle }); intro.Controls.Add(titles, 0, 0);
             FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 10, 0, 0) };
             _pause = ButtonAt("暂停采样", "pause", 116, 38, false); _pause.Click += PauseClicked;
-            _live = LabelAt("实时监测", 10, FontStyle.Regular, UiPalette.Accent); _live.TextAlign = ContentAlignment.MiddleRight; _live.Size = new Size(110, 38); _live.Margin = new Padding(0, 0, 16, 0);
-            _trafficButton = ButtonAt("流量排行", "network", 132, 38, false); _trafficButton.Margin = new Padding(0, 0, 12, 0);
-            _trafficButton.Click += delegate { ShowTrafficRanking(); };
-            _tips.SetToolTip(_trafficButton, "按程序比较实时下载、上传速度；沿用当前列表的筛选范围。");
-            actions.Controls.Add(_pause); actions.Controls.Add(_trafficButton); actions.Controls.Add(_live); intro.Controls.Add(actions, 1, 0); root.Controls.Add(intro, 0, 1);
+            _live = LabelAt("实时监测", 10, FontStyle.Regular, UiPalette.Accent); _live.TextAlign = ContentAlignment.MiddleRight; _live.Size = new Size(142, 38); _live.Margin = new Padding(0, 0, 16, 0);
+            actions.Controls.Add(_pause); actions.Controls.Add(_live); intro.Controls.Add(actions, 1, 0); root.Controls.Add(intro, 0, 1);
 
             TableLayoutPanel overview = Table(2); overview.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 304)); overview.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             RoundedPanel exit = new RoundedPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 9, 0) };
@@ -181,7 +181,7 @@ namespace RouteLens
             _detailsButton = ButtonAt("连接详情", "filter", 110, 32, false); _detailsButton.Click += delegate { if (ClientSize.Width / _dpiScale < 1280) ShowConnectionDetails(); else { _inspectorRequested = !_inspectorRequested; AdaptWorkspace(); } };
             filters.Controls.Add(_detailsButton, 1, 0); root.Controls.Add(filters, 0, 4);
             _workspace = Table(2); _workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); _workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 294));
-            RoundedPanel gridArea = new RoundedPanel { Dock = DockStyle.Fill, Radius = 12, Padding = new Padding(1), Margin = new Padding(0) };
+            RoundedPanel gridArea = new RoundedPanel { Dock = DockStyle.Fill, Radius = 18, Padding = new Padding(1), Margin = new Padding(0) };
             BuildGrid(); gridArea.Controls.Add(_grid);
             _empty = LabelAt("正在读取系统连接…", 12, FontStyle.Regular, UiPalette.Muted); _empty.BackColor = Color.White; _empty.TextAlign = ContentAlignment.MiddleCenter;
             gridArea.Controls.Add(_empty); _empty.BringToFront(); gridArea.Resize += delegate { _empty.Bounds = new Rectangle(20, Math.Max(50, gridArea.Height / 2 - 38), Math.Max(80, gridArea.Width - 40), 90); };
@@ -198,11 +198,11 @@ namespace RouteLens
 
         private Control BuildTitleBar()
         {
-            TableLayoutPanel bar = Table(2); bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
+            TableLayoutPanel bar = Table(3); bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
             Panel brand = new Panel { Dock = DockStyle.Fill };
             BrandMark mark = new BrandMark { Bounds = new Rectangle(0, 13, 31, 31) };
             Label name = LabelAt("RouteLens", 13, FontStyle.Bold, UiPalette.Ink); name.Font = UiPalette.Heading(13); name.SetBounds(42, 15, 108, 29);
-            Label descriptor = LabelAt("网络观察", 9, FontStyle.Regular, UiPalette.Muted); descriptor.SetBounds(156, 19, 180, 23);
+            Label descriptor = LabelAt("网络观察", 9, FontStyle.Regular, UiPalette.Muted); descriptor.SetBounds(156, 19, 64, 23);
             brand.Controls.AddRange(new Control[] { mark, name, descriptor });
             MouseEventHandler drag = delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0xA1, new IntPtr(2), IntPtr.Zero); } };
             brand.MouseDown += drag; mark.MouseDown += drag; name.MouseDown += drag; descriptor.MouseDown += drag;
@@ -211,8 +211,26 @@ namespace RouteLens
             ModernButton min = (ModernButton)ButtonAt("", "minus", 40, 36, false); min.Quiet = true; min.AccessibleName = "最小化"; min.Click += delegate { WindowState = FormWindowState.Minimized; };
             ModernButton max = (ModernButton)ButtonAt("", "maximize", 40, 36, false); max.Quiet = true; max.AccessibleName = "最大化或还原"; max.Click += delegate { ToggleMaximize(); };
             ModernButton close = (ModernButton)ButtonAt("", "close", 40, 36, false); close.Quiet = true; close.AccessibleName = "关闭"; close.Click += delegate { Close(); };
-            window.Controls.AddRange(new Control[] { min, max, close }); bar.Controls.Add(brand, 0, 0); bar.Controls.Add(window, 1, 0); return bar;
+            Panel navHolder = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
+            RoundedPanel navSurface = new RoundedPanel { Width = 466, Height = 42, Radius = 15, SurfaceColor = UiPalette.Raised, BorderColor = UiPalette.Raised, Padding = new Padding(4), Margin = new Padding(0) };
+            FlowLayoutPanel nav = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = UiPalette.Raised, WrapContents = false, Margin = new Padding(0), Padding = new Padding(0) };
+            ModernButton connections = NavButton("连接", 58, false); connections.Click += delegate { if (_grid != null) _grid.Focus(); };
+            _trafficButton = NavButton("实时流量", 68, true); _trafficButton.Click += delegate { ShowTrafficRanking(); };
+            ModernButton history = NavButton("历史流量", 68, true); history.Click += delegate { ShowHistory(); };
+            ModernButton map = NavButton("世界地图", 68, true); map.Click += delegate { ShowMapExplorer(); };
+            ModernButton privacy = NavButton("隐私检测", 68, true); privacy.Click += delegate { ShowPrivacyCheck(); };
+            ModernButton offline = NavButton("离线地区", 68, true); offline.Click += delegate { ShowOfflineGeo(); };
+            ModernButton alerts = NavButton("提醒", 58, true); alerts.Click += delegate { ShowActivitySettings(); };
+            _tips.SetToolTip(_trafficButton, "查看按程序汇总的实时下载和上传速度");
+            _tips.SetToolTip(history, "按程序、域名和节点查看本机流量历史");
+            _tips.SetToolTip(privacy, "打开主动 DNS 检测；未点击开始时不会发起测试");
+            _tips.SetToolTip(offline, "管理本地 IP 地理位置数据库");
+            nav.Controls.AddRange(new Control[] { connections, _trafficButton, history, map, privacy, offline, alerts }); navSurface.Controls.Add(nav); navHolder.Controls.Add(navSurface);
+            navHolder.Resize += delegate { navSurface.Location = new Point(Math.Max(0, (navHolder.Width - navSurface.Width) / 2), Math.Max(0, (navHolder.Height - navSurface.Height) / 2)); };
+            window.Controls.AddRange(new Control[] { min, max, close }); bar.Controls.Add(brand, 0, 0); bar.Controls.Add(navHolder, 1, 0); bar.Controls.Add(window, 2, 0); return bar;
         }
+        private static ModernButton NavButton(string text, int width, bool quiet)
+        { return new ModernButton { Text = text, Width = width, Height = 34, Quiet = quiet, CornerRadius = 11, Margin = new Padding(0), Padding = new Padding(4, 0, 4, 0), Font = UiPalette.Body(9), AccessibleName = text }; }
         private void ToggleMaximize() { MaximizedBounds = Screen.FromHandle(Handle).WorkingArea; WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized; }
 
         private void BuildGrid()
@@ -245,7 +263,7 @@ namespace RouteLens
 
         private RoundedPanel BuildInspector()
         {
-            RoundedPanel card = new RoundedPanel { Dock = DockStyle.Fill, Radius = 12, Margin = new Padding(14, 0, 0, 0), AutoScroll = true, AutoScrollMinSize = new Size(0, 842) };
+            RoundedPanel card = new RoundedPanel { Dock = DockStyle.Fill, Radius = 18, Margin = new Padding(14, 0, 0, 0), AutoScroll = true, AutoScrollMinSize = new Size(0, 842) };
             Label heading = LabelAt("连接详情", 11, FontStyle.Bold, UiPalette.Ink); heading.SetBounds(19, 16, 210, 25);
             _detailProcess = LabelAt("选择一条连接", 13, FontStyle.Bold, UiPalette.Ink); _detailProcess.SetBounds(19, 48, 238, 29); _detailProcess.AutoEllipsis = true;
             _detailMeta = LabelAt("查看程序、网站与分流", 9, FontStyle.Regular, UiPalette.Muted); _detailMeta.SetBounds(20, 80, 238, 23);
@@ -324,6 +342,8 @@ namespace RouteLens
                 {
                     _snapshot = new NetworkSnapshot { Connections = new List<ConnectionInfo>(), CapturedAt = DateTime.Now, Error = ex.Message, SourceName = clash ? "Clash 原始连接" : "Windows 系统连接", SourceStatus = "读取失败：" + ex.Message };
                     _traffic.Update(_snapshot);
+                    _history.ResetBaseline();
+                    _alerts.ResetBaseline();
                     RenderView();
                 }
             }
@@ -333,7 +353,7 @@ namespace RouteLens
         private bool UseClash { get { return _sourcePicker == null || _sourcePicker.SelectedIndex == 0; } }
         private async Task ChangeSourceAsync()
         {
-            _sourceGeneration++; _snapshot = null; _countryCode = null; _traffic.Reset();
+            _sourceGeneration++; _snapshot = null; _countryCode = null; _traffic.Reset(); _history.ResetBaseline(); _alerts.ResetBaseline();
             _sampleTimer.Interval = UseClash ? 1000 : 2000;
             _includeUdp.Text = UseClash ? "UDP 连接" : "UDP 端点"; _includeUdp.Checked = UseClash;
             RenderView();
@@ -341,7 +361,7 @@ namespace RouteLens
         }
         private async void PauseClicked(object sender, EventArgs e)
         {
-            _paused = !_paused; _sourceGeneration++; _traffic.Reset(); _pause.Text = _paused ? "继续采样" : "暂停采样"; ((ModernButton)_pause).IconName = _paused ? "play" : "pause";
+            _paused = !_paused; _sourceGeneration++; _traffic.Reset(); _history.ResetBaseline(); _alerts.ResetBaseline(); _pause.Text = _paused ? "继续采样" : "暂停采样"; ((ModernButton)_pause).IconName = _paused ? "play" : "pause";
             if (_paused && _snapshot != null) _traffic.Update(_snapshot);
             _live.Text = _paused ? "采样已暂停" : "实时监测"; _live.ForeColor = _paused ? UiPalette.Muted : UiPalette.Accent;
             if (_paused) _sampleTimer.Stop(); else { _sampleTimer.Start(); await SampleAsync(); } RenderView();
@@ -437,7 +457,7 @@ namespace RouteLens
             string stamp = exit.CheckedAt == DateTime.MinValue ? "" : exit.CheckedAt.ToLocalTime().ToString("HH:mm:ss") + " 探测";
             _exitDetail.ForeColor = UiPalette.Muted;
             if (!String.IsNullOrEmpty(exit.Error)) { _exitDetail.Text = (hasIp ? "保留上次结果  /  " : "") + exit.Error; _exitDetail.ForeColor = UiPalette.Warn; }
-            else if (!_online.Checked) _exitDetail.Text = "联网查询已关闭" + (stamp.Length > 0 ? "  /  " + stamp + "（缓存）" : "");
+            else if (!_online.Checked) _exitDetail.Text = "联网查询已关闭" + (stamp.Length > 0 ? "  /  " + stamp + "（缓存或离线数据库）" : "");
             else if (exit.IsChecking) _exitDetail.Text = (hasIp ? "保留上次结果  /  " : "") + "正在探测当前出口";
             else _exitDetail.Text = stamp + (location != null && !String.IsNullOrEmpty(location.Organization) ? "  /  " + location.Organization : "") + (exit.CheckedAt != DateTime.MinValue && DateTime.UtcNow - exit.CheckedAt.ToUniversalTime() > TimeSpan.FromMinutes(3) ? "（结果可能已变化）" : "");
             _tips.SetToolTip(_exitDetail, _exitDetail.Text); _tips.SetToolTip(_exitIp, _exitIp.Text);
@@ -638,7 +658,11 @@ namespace RouteLens
                 bottom.Controls.Add(close); bottom.Controls.Add(copy); details.Controls.Add(text); details.Controls.Add(bottom); details.AcceptButton = close; details.CancelButton = close; details.ShowDialog(this);
             }
         }
-        private void AcceptSnapshot(NetworkSnapshot snapshot) { _snapshot = snapshot; _traffic.Update(snapshot); }
+        private void AcceptSnapshot(NetworkSnapshot snapshot)
+        {
+            _snapshot = snapshot; _traffic.Update(snapshot); _history.Update(snapshot);
+            _alerts.Update(snapshot, delegate(string ip) { GeoResult result = _geo.Peek(ip); return result != null && result.Success ? result.CountryCode : null; });
+        }
         public void SetSnapshotForTest(NetworkSnapshot snapshot) { AcceptSnapshot(snapshot); RenderView(); }
 
         private TrafficReport GetTrafficReport()
@@ -651,7 +675,22 @@ namespace RouteLens
         }
         private void ShowTrafficRanking()
         {
-            using (TrafficRankingDialog dialog = new TrafficRankingDialog(GetTrafficReport)) dialog.ShowDialog(this);
+            using (TrafficRankingDialog dialog = new TrafficRankingDialog(GetTrafficReport, delegate { return _paused; })) dialog.ShowDialog(this);
+        }
+        private void ShowHistory() { using (HistoryDialog dialog = new HistoryDialog(_history)) dialog.ShowDialog(this); }
+        private void ShowPrivacyCheck() { using (PrivacyDnsDialog dialog = new PrivacyDnsDialog()) dialog.ShowDialog(this); }
+        private void ShowOfflineGeo() { using (OfflineCountryDialog dialog = new OfflineCountryDialog(_geo.Offline)) dialog.ShowDialog(this); RenderView(); }
+        private void ShowActivitySettings() { using (ActivityAlertsDialog dialog = new ActivityAlertsDialog(_alerts)) dialog.ShowDialog(this); }
+        private void ShowActivityNotification(string text)
+        {
+            if (_closing || String.IsNullOrWhiteSpace(text)) return;
+            try
+            {
+                if (_activityNotification == null) _activityNotification = new NotifyIcon { Icon = SystemIcons.Information, Text = "RouteLens · 网络提醒" };
+                _activityNotification.Visible = true; _activityNotification.ShowBalloonTip(5000, "RouteLens 网络提醒", text, ToolTipIcon.Info);
+            }
+            catch (ExternalException) { }
+            catch (ArgumentException) { }
         }
         private void ShowMapExplorer()
         {
@@ -684,7 +723,7 @@ namespace RouteLens
             }
             base.WndProc(ref m);
         }
-        protected override void OnFormClosing(FormClosingEventArgs e) { _closing = true; _sourceGeneration++; _sampleTimer.Stop(); _viewTimer.Stop(); _sampleTimer.Dispose(); _viewTimer.Dispose(); _tips.Dispose(); if (_dnsNotification != null) _dnsNotification.Dispose(); _dns.Dispose(); _clash.Dispose(); _geo.Dispose(); base.OnFormClosing(e); }
+        protected override void OnFormClosing(FormClosingEventArgs e) { _closing = true; _sourceGeneration++; _sampleTimer.Stop(); _viewTimer.Stop(); _sampleTimer.Dispose(); _viewTimer.Dispose(); _tips.Dispose(); if (_dnsNotification != null) _dnsNotification.Dispose(); if (_activityNotification != null) _activityNotification.Dispose(); _history.Dispose(); _dns.Dispose(); _clash.Dispose(); _geo.Dispose(); base.OnFormClosing(e); }
         private sealed class RowData { public string Id; public ConnectionInfo Connection; public string Process; public string Country; public string Organization; public Image Flag; public GeoResult Geo; }
         private sealed class ConnectionGrid : DataGridView { public ConnectionGrid() { DoubleBuffered = true; } }
     }

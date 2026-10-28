@@ -9,6 +9,7 @@ namespace RouteLens
     public sealed class TrafficRankingDialog : Form
     {
         private readonly Func<TrafficReport> _provider;
+        private readonly Func<bool> _isMainPaused;
         private readonly Timer _timer = new Timer();
         private readonly ToolTip _tips = new ToolTip();
         private readonly Label _download;
@@ -20,14 +21,16 @@ namespace RouteLens
         private readonly TextBox _path;
         private readonly ComboBox _sort;
         private readonly RankingGrid _grid;
+        private readonly TrafficTrend _trend;
         private readonly Dictionary<string, DataGridViewRow> _rows = new Dictionary<string, DataGridViewRow>(StringComparer.Ordinal);
         private TrafficReport _report;
         private bool _updating;
 
-        public TrafficRankingDialog(Func<TrafficReport> provider)
+        public TrafficRankingDialog(Func<TrafficReport> provider, Func<bool> isMainPaused = null)
         {
             if (provider == null) throw new ArgumentNullException("provider");
             _provider = provider;
+            _isMainPaused = isMainPaused ?? delegate { return false; };
             Text = "实时流量排行 · RouteLens";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(1000, 700);
@@ -41,11 +44,12 @@ namespace RouteLens
             AutoScaleDimensions = new SizeF(96, 96);
             Padding = new Padding(22, 16, 22, 14);
 
-            TableLayoutPanel layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Margin = new Padding(0), Padding = new Padding(0) };
+            TableLayoutPanel layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7, Margin = new Padding(0), Padding = new Padding(0) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 104));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
@@ -84,14 +88,22 @@ namespace RouteLens
             _status.AccessibleName = "流量数据来源、筛选范围与计速状态";
             layout.Controls.Add(_status, 0, 2);
 
-            TableLayoutPanel toolbar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0), Padding = new Padding(0) };
+            RoundedPanel trendCard = new RoundedPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 4), Padding = new Padding(2), Radius = 18 };
+            _trend = new TrafficTrend(); trendCard.Controls.Add(_trend); layout.Controls.Add(trendCard, 0, 3);
+
+            TableLayoutPanel toolbar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1, Margin = new Padding(0), Padding = new Padding(0) };
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 126));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 144));
             Label listHeading = TextLabel("程序流量", 11, UiPalette.Ink);
             listHeading.Font = new Font("Microsoft YaHei UI", 11, FontStyle.Bold);
             toolbar.Controls.Add(listHeading, 0, 0);
-            toolbar.Controls.Add(TextLabel("排序", 9, UiPalette.Muted), 1, 0);
+            ModernButton interfaces = new ModernButton { Text = "网卡流量", Dock = DockStyle.Fill, Margin = new Padding(0, 4, 10, 4), AccessibleName = "查看 Windows 各网卡实时流量" };
+            interfaces.Click += delegate { using (SystemTrafficDialog dialog = new SystemTrafficDialog(_isMainPaused)) dialog.ShowDialog(this); };
+            _tips.SetToolTip(interfaces, "查看每张网卡的上传和下载速度；不推断程序归属，也不合计可能重复的网卡流量。");
+            toolbar.Controls.Add(interfaces, 1, 0);
+            toolbar.Controls.Add(TextLabel("排序", 9, UiPalette.Muted), 2, 0);
             _sort = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Font = UiPalette.Body(9.5f), Margin = new Padding(0, 7, 0, 7), AccessibleName = "流量排行排序方式" };
             _sort.Items.AddRange(new object[] { "下载速度", "上传速度", "总速度" });
             _sort.SelectedIndex = 0;
@@ -107,8 +119,8 @@ namespace RouteLens
                     UpdateSelection();
                 }
             };
-            toolbar.Controls.Add(_sort, 2, 0);
-            layout.Controls.Add(toolbar, 0, 3);
+            toolbar.Controls.Add(_sort, 3, 0);
+            layout.Controls.Add(toolbar, 0, 4);
 
             RoundedPanel tableCard = new RoundedPanel { Dock = DockStyle.Fill, Margin = new Padding(0), Radius = 10, Padding = new Padding(1) };
             _grid = new RankingGrid { Dock = DockStyle.Fill, BackgroundColor = UiPalette.Surface, BorderStyle = BorderStyle.None, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
@@ -138,7 +150,7 @@ namespace RouteLens
             _empty.Dock = DockStyle.Fill;
             tableCard.Controls.Add(_grid);
             tableCard.Controls.Add(_empty);
-            layout.Controls.Add(tableCard, 0, 4);
+            layout.Controls.Add(tableCard, 0, 5);
 
             TableLayoutPanel footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = new Padding(0), Padding = new Padding(0, 8, 0, 0) };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -154,7 +166,7 @@ namespace RouteLens
             footer.Controls.Add(close, 1, 0);
             footer.SetRowSpan(close, 2);
             CancelButton = close;
-            layout.Controls.Add(footer, 0, 5);
+            layout.Controls.Add(footer, 0, 6);
 
             _timer.Interval = 1000;
             _timer.Tick += delegate { RefreshReport(); };
@@ -192,7 +204,8 @@ namespace RouteLens
             TrafficReport report;
             try { report = _provider(); }
             catch { report = new TrafficReport { Status = "暂时无法读取流量数据，请等待下一次采样。" }; }
-            RenderReport(report ?? new TrafficReport { Status = "等待连接采样。" });
+            report = report ?? new TrafficReport { Status = "等待连接采样。" };
+            _trend.Record(report); RenderReport(report);
         }
 
         private void RenderReport(TrafficReport report)

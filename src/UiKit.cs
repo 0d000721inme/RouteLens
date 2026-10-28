@@ -7,14 +7,14 @@ namespace RouteLens
 {
     public static class UiPalette
     {
-        public static readonly Color Canvas = Color.FromArgb(244, 246, 247);
+        public static readonly Color Canvas = Color.FromArgb(243, 246, 251);
         public static readonly Color Surface = Color.White;
-        public static readonly Color Raised = Color.FromArgb(247, 249, 250);
-        public static readonly Color Border = Color.FromArgb(227, 232, 236);
-        public static readonly Color Ink = Color.FromArgb(32, 42, 50);
-        public static readonly Color Muted = Color.FromArgb(101, 114, 126);
-        public static readonly Color Accent = Color.FromArgb(36, 123, 104);
-        public static readonly Color AccentSoft = Color.FromArgb(231, 242, 237);
+        public static readonly Color Raised = Color.FromArgb(237, 242, 248);
+        public static readonly Color Border = Color.FromArgb(219, 229, 240);
+        public static readonly Color Ink = Color.FromArgb(30, 42, 58);
+        public static readonly Color Muted = Color.FromArgb(91, 106, 127);
+        public static readonly Color Accent = Color.FromArgb(28, 103, 193);
+        public static readonly Color AccentSoft = Color.FromArgb(229, 240, 252);
         public static readonly Color Warn = Color.FromArgb(154, 106, 37);
 
         public static Font Body(float size) { return new Font("Microsoft YaHei UI", size, FontStyle.Regular, GraphicsUnit.Point); }
@@ -130,7 +130,7 @@ namespace RouteLens
 
     public class RoundedPanel : Panel
     {
-        private int radius = 14;
+        private int radius = 20;
         private Color surface = UiPalette.Surface;
         private Color border = UiPalette.Border;
 
@@ -160,7 +160,7 @@ namespace RouteLens
         private bool primary;
         private bool quiet;
         private string iconName;
-        private int cornerRadius = 8;
+        private int cornerRadius = 12;
 
         public ModernButton()
         {
@@ -199,7 +199,7 @@ namespace RouteLens
             }
             else if (Primary)
             {
-                fill = pressed ? Color.FromArgb(26, 96, 80) : (hovered ? Color.FromArgb(31, 111, 93) : UiPalette.Accent);
+                fill = pressed ? Color.FromArgb(18, 76, 151) : (hovered ? Color.FromArgb(24, 91, 175) : UiPalette.Accent);
                 outline = fill; text = Color.White;
             }
             else
@@ -227,7 +227,7 @@ namespace RouteLens
                 TextRenderer.DrawText(graphics, Text, Font, new Rectangle(x, content.Top, textWidth + 1, content.Height), text, UiPaint.TextFlags | TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
             if (Focused && ShowFocusCues && Enabled)
             {
-                Color focus = Primary ? Color.FromArgb(210, 239, 230) : UiPalette.Accent;
+                Color focus = Primary ? Color.FromArgb(218, 234, 255) : UiPalette.Accent;
                 using (Pen pen = new Pen(focus, 1.2f * scale))
                 using (GraphicsPath path = UiPaint.RoundedPath(new RectangleF(3 * scale, 3 * scale, Math.Max(0, Width - 6 * scale), Math.Max(0, Height - 6 * scale)), Math.Max(1, CornerRadius - 2) * scale))
                 {
