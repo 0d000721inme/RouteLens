@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace RouteLens
 {
@@ -13,10 +14,11 @@ namespace RouteLens
         private readonly Dictionary<string, DateTime> _lastAlerts = new Dictionary<string, DateTime>();
         private readonly TrafficTracker _traffic = new TrafficTracker();
         private readonly Func<DateTime> _clock;
-        private bool _enabled, _newPrograms, _newCountries, _highTraffic, _baseline;
+        private bool _enabled, _newPrograms, _newCountries, _highTraffic, _sustainedUpload, _baseline;
         private string _source;
         private DateTime _lastSnapshot;
         private double _threshold = 10 * 1024 * 1024;
+        private double _uploadThreshold = 1024 * 1024, _uploadSeconds = 10, _uploadRun;
 
         public ActivityAlerts() : this(delegate { return DateTime.UtcNow; }) { }
         internal ActivityAlerts(Func<DateTime> clock) { if (clock == null) throw new ArgumentNullException("clock"); _clock = clock; }
@@ -35,6 +37,17 @@ namespace RouteLens
         public bool NewProgramsEnabled { get { return _newPrograms; } set { if (_newPrograms != value) { _newPrograms = value; ResetBaseline(); } } }
         public bool NewCountriesEnabled { get { return _newCountries; } set { if (_newCountries != value) { _newCountries = value; ResetBaseline(); } } }
         public bool HighTrafficEnabled { get { return _highTraffic; } set { if (_highTraffic != value) { _highTraffic = value; ResetBaseline(); } } }
+        public bool SustainedUploadEnabled { get { return _sustainedUpload; } set { if (_sustainedUpload != value) { _sustainedUpload = value; ResetBaseline(); } } }
+        public double SustainedUploadBytesPerSecond
+        {
+            get { return _uploadThreshold; }
+            set { if (Double.IsNaN(value) || Double.IsInfinity(value) || value < 1024 || value > 10240d * 1024 * 1024) throw new ArgumentOutOfRangeException("value"); if (_uploadThreshold != value) { _uploadThreshold = value; _uploadRun = 0; } }
+        }
+        public double SustainedUploadSeconds
+        {
+            get { return _uploadSeconds; }
+            set { if (Double.IsNaN(value) || Double.IsInfinity(value) || value < 1 || value > 3600) throw new ArgumentOutOfRangeException("value"); if (_uploadSeconds != value) { _uploadSeconds = value; _uploadRun = 0; } }
+        }
         public double HighTrafficBytesPerSecond
         {
             get { return _threshold; }
@@ -43,11 +56,11 @@ namespace RouteLens
 
         // Keep previously seen evidence across pause/temporary disconnects while
         // forcing the first accepted sample to establish a new baseline silently.
-        public void ResetBaseline() { _baseline = false; _source = null; _lastSnapshot = default(DateTime); _traffic.Reset(); }
+        public void ResetBaseline() { _baseline = false; _source = null; _lastSnapshot = default(DateTime); _uploadRun = 0; _traffic.Reset(); }
 
         public void Update(NetworkSnapshot snapshot, Func<string, string> countryResolver)
         {
-            if (!_enabled || (!_newPrograms && !_newCountries && !_highTraffic)) { ResetBaseline(); return; }
+            if (!_enabled || (!_newPrograms && !_newCountries && !_highTraffic && !_sustainedUpload)) { ResetBaseline(); return; }
             if (snapshot == null || snapshot.Connections == null || !String.IsNullOrWhiteSpace(snapshot.Error) ||
                 (Text(snapshot.SourceName).IndexOf("Clash", StringComparison.OrdinalIgnoreCase) >= 0 && !snapshot.ClashConnected))
             { ResetBaseline(); return; }
@@ -55,7 +68,7 @@ namespace RouteLens
             double interval = (snapshot.CapturedAt - _lastSnapshot).TotalSeconds;
             bool establishing = !_baseline || _lastSnapshot == default(DateTime) || snapshot.CapturedAt == default(DateTime) ||
                 interval <= 0 || interval > 5 || !String.Equals(source, _source, StringComparison.Ordinal);
-            if (establishing) _traffic.Reset();
+            if (establishing) { _traffic.Reset(); _uploadRun = 0; }
             _source = source; _lastSnapshot = snapshot.CapturedAt; _baseline = true;
             _traffic.Update(snapshot);
 
@@ -85,11 +98,21 @@ namespace RouteLens
             if (establishing) return;
             if (newPrograms > 0) Notify("program", "发现 " + newPrograms + " 个新联网程序组，打开 RouteLens 查看。");
             if (newCountries > 0) Notify("country", "发现 " + newCountries + " 个新目标地区，打开 RouteLens 查看。");
-            if (_highTraffic)
+            if (_highTraffic || _sustainedUpload)
             {
                 TrafficReport report = _traffic.Build(snapshot.Connections, false);
-                if (report.Available && report.Measuring && report.DownloadPerSecond + report.UploadPerSecond >= _threshold)
+                if (_highTraffic && report.Available && report.Measuring && report.DownloadPerSecond + report.UploadPerSecond >= _threshold)
                     Notify("traffic", "Clash 已计速连接的总流量速度达到提醒阈值，打开 RouteLens 查看。");
+                // Require every currently observed connection to be comparable: a
+                // new/reset/missing counter or gap breaks the continuous interval.
+                if (_sustainedUpload && report.Available && report.Measuring && report.ConnectionCount > 0 &&
+                    report.MeasuredConnectionCount == report.ConnectionCount && report.UploadPerSecond >= _uploadThreshold)
+                {
+                    _uploadRun += interval;
+                    if (_uploadRun >= _uploadSeconds)
+                        Notify("upload", String.Format(CultureInfo.InvariantCulture, "观察到 Clash 已计速连接合计上传速度持续达到 {0:0.##} MiB/s，至少 {1:0.##} 秒；这不代表恶意行为。", _uploadThreshold / (1024d * 1024), _uploadSeconds));
+                }
+                else _uploadRun = 0;
             }
         }
 

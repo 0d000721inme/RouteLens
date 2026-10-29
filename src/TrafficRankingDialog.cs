@@ -25,6 +25,8 @@ namespace RouteLens
         private readonly Dictionary<string, DataGridViewRow> _rows = new Dictionary<string, DataGridViewRow>(StringComparer.Ordinal);
         private TrafficReport _report;
         private bool _updating;
+        private readonly Dictionary<string, TargetObservation> _observedTargets = new Dictionary<string, TargetObservation>(StringComparer.OrdinalIgnoreCase);
+        private DateTime _lastTargetSnapshot;
 
         public TrafficRankingDialog(Func<TrafficReport> provider, Func<bool> isMainPaused = null)
         {
@@ -91,8 +93,9 @@ namespace RouteLens
             RoundedPanel trendCard = new RoundedPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 4), Padding = new Padding(2), Radius = 18 };
             _trend = new TrafficTrend(); trendCard.Controls.Add(_trend); layout.Controls.Add(trendCard, 0, 3);
 
-            TableLayoutPanel toolbar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1, Margin = new Padding(0), Padding = new Padding(0) };
+            TableLayoutPanel toolbar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1, Margin = new Padding(0), Padding = new Padding(0) };
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 126));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 126));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 144));
@@ -102,8 +105,12 @@ namespace RouteLens
             ModernButton interfaces = new ModernButton { Text = "网卡流量", Dock = DockStyle.Fill, Margin = new Padding(0, 4, 10, 4), AccessibleName = "查看 Windows 各网卡实时流量" };
             interfaces.Click += delegate { using (SystemTrafficDialog dialog = new SystemTrafficDialog(_isMainPaused)) dialog.ShowDialog(this); };
             _tips.SetToolTip(interfaces, "查看每张网卡的上传和下载速度；不推断程序归属，也不合计可能重复的网卡流量。");
-            toolbar.Controls.Add(interfaces, 1, 0);
-            toolbar.Controls.Add(TextLabel("排序", 9, UiPalette.Muted), 2, 0);
+            ModernButton targets = new ModernButton { Text = "目标观察", Dock = DockStyle.Fill, Margin = new Padding(0, 4, 10, 4), AccessibleName = "查看最近活动目标和有上传增量的目标" };
+            targets.Click += delegate { using (TargetObservationsDialog dialog = new TargetObservationsDialog(RecentTargets)) dialog.ShowDialog(this); };
+            _tips.SetToolTip(targets, "只记录实时流量窗口打开期间观察到的目标；上传增量来自有效的 Clash 连接采样。");
+            toolbar.Controls.Add(targets, 1, 0);
+            toolbar.Controls.Add(interfaces, 2, 0);
+            toolbar.Controls.Add(TextLabel("排序", 9, UiPalette.Muted), 3, 0);
             _sort = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Font = UiPalette.Body(9.5f), Margin = new Padding(0, 7, 0, 7), AccessibleName = "流量排行排序方式" };
             _sort.Items.AddRange(new object[] { "下载速度", "上传速度", "总速度" });
             _sort.SelectedIndex = 0;
@@ -119,7 +126,7 @@ namespace RouteLens
                     UpdateSelection();
                 }
             };
-            toolbar.Controls.Add(_sort, 3, 0);
+            toolbar.Controls.Add(_sort, 4, 0);
             layout.Controls.Add(toolbar, 0, 4);
 
             RoundedPanel tableCard = new RoundedPanel { Dock = DockStyle.Fill, Margin = new Padding(0), Radius = 10, Padding = new Padding(1) };
@@ -205,7 +212,31 @@ namespace RouteLens
             try { report = _provider(); }
             catch { report = new TrafficReport { Status = "暂时无法读取流量数据，请等待下一次采样。" }; }
             report = report ?? new TrafficReport { Status = "等待连接采样。" };
-            _trend.Record(report); RenderReport(report);
+            RecordTargets(report); _trend.Record(report); RenderReport(report);
+        }
+
+        private void RecordTargets(TrafficReport report)
+        {
+            if (!report.Fresh || report.SnapshotAt == default(DateTime) || report.SnapshotAt == _lastTargetSnapshot) return;
+            _lastTargetSnapshot = report.SnapshotAt; DateTime now = DateTime.UtcNow;
+            foreach (TargetTraffic target in report.Targets ?? new List<TargetTraffic>())
+            {
+                if (target == null || String.IsNullOrWhiteSpace(target.Name) || String.IsNullOrEmpty(target.Key)) continue;
+                TargetObservation item;
+                if (!_observedTargets.TryGetValue(target.Key, out item))
+                { item = new TargetObservation { Name = target.Name, Program = target.Program }; _observedTargets[target.Key] = item; }
+                item.LastSeen = now;
+                if (target.PositiveUpload) item.LastUpload = now;
+            }
+            foreach (string key in _observedTargets.Where(x => now < x.Value.LastSeen || now - x.Value.LastSeen > TimeSpan.FromMinutes(5)).Select(x => x.Key).ToList()) _observedTargets.Remove(key);
+            foreach (string key in _observedTargets.OrderByDescending(x => x.Value.LastSeen).Skip(200).Select(x => x.Key).ToList()) _observedTargets.Remove(key);
+        }
+
+        private List<TargetObservation> RecentTargets()
+        {
+            DateTime now = DateTime.UtcNow;
+            return _observedTargets.Values.Where(x => now >= x.LastSeen && now - x.LastSeen <= TimeSpan.FromMinutes(5))
+                .OrderByDescending(x => x.LastSeen).Select(x => new TargetObservation { Name = x.Name, Program = x.Program, LastSeen = x.LastSeen, LastUpload = x.LastUpload }).ToList();
         }
 
         private void RenderReport(TrafficReport report)
@@ -216,11 +247,11 @@ namespace RouteLens
             _download.Text = measured ? FormatRate(report.DownloadPerSecond) : "—";
             _upload.Text = measured ? FormatRate(report.UploadPerSecond) : "—";
             _programs.Text = programs.Count.ToString();
-            _coverage.Text = "已计速 " + Math.Max(0, report.MeasuredConnectionCount) + " / " + Math.Max(0, report.ConnectionCount) + " 条连接";
+            _coverage.Text = "已计速 " + Math.Max(0, report.MeasuredConnectionCount) + " / " + Math.Max(0, report.ConnectionCount) + " 条已观察连接";
             _status.Text = String.IsNullOrWhiteSpace(report.Status) ? (report.Available ? "等待下一次采样后计速。" : "当前连接来源未提供流量计数。") : report.Status;
             _status.ForeColor = measured ? UiPalette.Muted : UiPalette.Warn;
             _tips.SetToolTip(_status, _status.Text);
-            _tips.SetToolTip(_coverage, "只有取得两次新鲜、连续字节计数的连接才可计速。部分连接待采样时，合计速度仅包含已计速部分。");
+            _tips.SetToolTip(_coverage, "分母是当前筛选范围内已观察到的 Clash 活动连接，不代表全机覆盖；短连接可能遗漏。只有取得连续计数的连接才可计速。");
             _tips.SetToolTip(_download, measured ? "已计速部分下载速度；不包含当前无法计速的连接。" : "等待有效采样；无法计速时不显示为 0。");
             _tips.SetToolTip(_upload, measured ? "已计速部分上传速度；不包含当前无法计速的连接。" : "等待有效采样；无法计速时不显示为 0。");
 

@@ -8,8 +8,51 @@ internal static class ActivityAlertsChecks
     private static int checks;
     [STAThread] private static int Main()
     {
-        try { Run(); Console.WriteLine("PASS " + checks + " session alert checks; fictional data only, no network or disk history."); return 0; }
+        try { Run(); SustainedUpload(); Console.WriteLine("PASS " + checks + " session alert checks; fictional data only, no network or disk history."); return 0; }
         catch (Exception ex) { Console.Error.WriteLine("FAIL " + ex.Message); return 1; }
+    }
+    private static void SustainedUpload()
+    {
+        DateTime at = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        DateTime clock = at;
+        ActivityAlerts alerts = new ActivityAlerts(delegate { return clock; });
+        List<string> events = new List<string>(); alerts.Alert += events.Add;
+        Check(!alerts.SustainedUploadEnabled && alerts.SustainedUploadSeconds == 10 && alerts.SustainedUploadBytesPerSecond == 1048576, "Upload rule defaults incorrect");
+        alerts.Enabled = true; alerts.SustainedUploadEnabled = true;
+        for (int i = 0; i <= 9; i++)
+        {
+            ConnectionInfo a = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); a.UploadBytes = i * 1048576L;
+            alerts.Update(Snapshot(at.AddSeconds(i), "Clash", a), null);
+        }
+        Check(events.Count == 0, "Triggered before ten seconds of valid upload");
+        ConnectionInfo tenth = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); tenth.UploadBytes = 10 * 1048576L;
+        alerts.Update(Snapshot(at.AddSeconds(10), "Clash", tenth), null);
+        Check(events.Count == 1 && events[0].Contains("1 MiB/s") && events[0].Contains("10 秒") && !events[0].Contains("192.0.2") && !events[0].Contains("a.exe"), "Ten-second trigger, parameters or notification privacy incorrect");
+        for (int i = 11; i <= 15; i++) { ConnectionInfo a = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); a.UploadBytes = i * 1048576L; alerts.Update(Snapshot(at.AddSeconds(i), "Clash", a), null); }
+        Check(events.Count == 1, "Upload cooldown failed");
+        clock = clock.AddMinutes(6); alerts.ResetBaseline();
+        ConnectionInfo first = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); first.UploadBytes = 0;
+        alerts.Update(Snapshot(at.AddSeconds(20), "Clash", first), null);
+        for (int i = 1; i <= 6; i++) { ConnectionInfo a = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); a.UploadBytes = i * 1048576L; alerts.Update(Snapshot(at.AddSeconds(20 + i), "Clash", a), null); }
+        ConnectionInfo reset = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); reset.UploadBytes = 0;
+        alerts.Update(Snapshot(at.AddSeconds(27), "Clash", reset), null);
+        for (int i = 1; i <= 9; i++) { ConnectionInfo a = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); a.UploadBytes = i * 1048576L; alerts.Update(Snapshot(at.AddSeconds(27 + i), "Clash", a), null); }
+        Check(events.Count == 1, "Counter reset did not break sustained window");
+        reset.UploadBytes = 10 * 1048576L; alerts.Update(Snapshot(at.AddSeconds(37), "Clash", reset), null);
+        Check(events.Count == 2, "Sustained window failed after counter reset");
+        alerts.ResetBaseline(); clock = clock.AddMinutes(6);
+        for (int i = 0; i <= 6; i++) { ConnectionInfo a = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); a.UploadBytes = i * 1048576L; alerts.Update(Snapshot(at.AddSeconds(40 + i), "Clash", a), null); }
+        ConnectionInfo partial = Row("missing", "C:\\Example\\b.exe", "b.exe", 22, "192.0.2.2", 0); partial.HasTrafficCounters = false;
+        ConnectionInfo good = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); good.UploadBytes = 7 * 1048576L;
+        alerts.Update(Snapshot(at.AddSeconds(47), "Clash", good, partial), null);
+        for (int i = 8; i <= 16; i++) { ConnectionInfo a = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); a.UploadBytes = i * 1048576L; alerts.Update(Snapshot(at.AddSeconds(40 + i), "Clash", a), null); }
+        Check(events.Count == 2, "Missing counter did not break sustained window");
+        alerts.ResetBaseline();
+        for (int i = 0; i <= 6; i++) { ConnectionInfo a = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); a.UploadBytes = i * 1048576L; alerts.Update(Snapshot(at.AddSeconds(60 + i), "Clash", a), null); }
+        for (int i = 7; i <= 16; i++) { ConnectionInfo a = Row("upload", "C:\\Example\\a.exe", "a.exe", 21, "192.0.2.1", 0); a.UploadBytes = i * 1048576L; alerts.Update(Snapshot(at.AddSeconds(66 + i), "Clash", a), null); }
+        Check(events.Count == 2, "Sampling gap did not break sustained window");
+        bool bad = false; try { alerts.SustainedUploadSeconds = 0; } catch (ArgumentOutOfRangeException) { bad = true; }
+        Check(bad, "Invalid duration accepted");
     }
     private static void Run()
     {

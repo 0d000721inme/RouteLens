@@ -18,6 +18,7 @@ namespace RouteLens
         private readonly TrafficTracker _traffic = new TrafficTracker();
         private readonly HistoryStore _history;
         private readonly ActivityAlerts _alerts = new ActivityAlerts();
+        private readonly EvidenceMonitor _evidence = new EvidenceMonitor();
         private List<ConnectionInfo> _trafficConnections = new List<ConnectionInfo>();
         private MapExplorerSnapshot _mapSnapshot = new MapExplorerSnapshot { Countries = new List<CountryStat>(), Connections = new List<MapConnection>(), SourceUnavailable = true, SourceStatus = "正在读取连接" };
         private readonly Timer _sampleTimer = new Timer();
@@ -61,14 +62,14 @@ namespace RouteLens
         {
             if (geo == null) throw new ArgumentNullException("geo");
             _geo = geo; _history = new HistoryStore(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data"));
-            _alerts.Alert += ShowActivityNotification; Text = "RouteLens · 网络观察";
+            _alerts.Alert += delegate(string message) { if (message != null && message.IndexOf("持续上传", StringComparison.Ordinal) >= 0) _evidence.RecordUploadAlert(_alerts.SustainedUploadBytesPerSecond, _alerts.SustainedUploadSeconds); else _evidence.RecordAlert(message); ShowActivityNotification(message); }; Text = "RouteLens · 网络观察";
             BackColor = UiPalette.Canvas; ForeColor = UiPalette.Ink; Font = UiPalette.Body(10);
             AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96f, 96f);
             FormBorderStyle = FormBorderStyle.None; ClientSize = new Size(1380, 900); MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen; DoubleBuffered = true; KeyPreview = true;
             BuildInterface();
             _sampleTimer.Interval = 1000; _sampleTimer.Tick += async delegate { await SampleAsync(); };
-            _viewTimer.Interval = 1000; _viewTimer.Tick += delegate { RenderView(); };
+            _viewTimer.Interval = 1000; _viewTimer.Tick += delegate { _evidence.CheckStale(); UpdateHistoryEvidence(); RenderView(); };
             Shown += async delegate
             {
                 using (Graphics graphics = CreateGraphics()) _dpiScale = graphics.DpiX / 96f;
@@ -212,7 +213,7 @@ namespace RouteLens
             ModernButton max = (ModernButton)ButtonAt("", "maximize", 40, 36, false); max.Quiet = true; max.AccessibleName = "最大化或还原"; max.Click += delegate { ToggleMaximize(); };
             ModernButton close = (ModernButton)ButtonAt("", "close", 40, 36, false); close.Quiet = true; close.AccessibleName = "关闭"; close.Click += delegate { Close(); };
             Panel navHolder = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
-            RoundedPanel navSurface = new RoundedPanel { Width = 466, Height = 42, Radius = 15, SurfaceColor = UiPalette.Raised, BorderColor = UiPalette.Raised, Padding = new Padding(4), Margin = new Padding(0) };
+            RoundedPanel navSurface = new RoundedPanel { Width = 524, Height = 42, Radius = 15, SurfaceColor = UiPalette.Raised, BorderColor = UiPalette.Raised, Padding = new Padding(4), Margin = new Padding(0) };
             FlowLayoutPanel nav = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = UiPalette.Raised, WrapContents = false, Margin = new Padding(0), Padding = new Padding(0) };
             ModernButton connections = NavButton("连接", 58, false); connections.Click += delegate { if (_grid != null) _grid.Focus(); };
             _trafficButton = NavButton("实时流量", 68, true); _trafficButton.Click += delegate { ShowTrafficRanking(); };
@@ -221,11 +222,13 @@ namespace RouteLens
             ModernButton privacy = NavButton("隐私检测", 68, true); privacy.Click += delegate { ShowPrivacyCheck(); };
             ModernButton offline = NavButton("离线地区", 68, true); offline.Click += delegate { ShowOfflineGeo(); };
             ModernButton alerts = NavButton("提醒", 58, true); alerts.Click += delegate { ShowActivitySettings(); };
+            ModernButton evidence = NavButton("证据", 58, true); evidence.Click += delegate { ShowEvidence(); };
             _tips.SetToolTip(_trafficButton, "查看按程序汇总的实时下载和上传速度");
             _tips.SetToolTip(history, "按程序、域名和节点查看本机流量历史");
             _tips.SetToolTip(privacy, "打开主动 DNS 检测；未点击开始时不会发起测试");
             _tips.SetToolTip(offline, "管理本地 IP 地理位置数据库");
-            nav.Controls.AddRange(new Control[] { connections, _trafficButton, history, map, privacy, offline, alerts }); navSurface.Controls.Add(nav); navHolder.Controls.Add(navSurface);
+            _tips.SetToolTip(evidence, "查看采集状态、连接证据和系统变更");
+            nav.Controls.AddRange(new Control[] { connections, _trafficButton, history, map, privacy, offline, alerts, evidence }); navSurface.Controls.Add(nav); navHolder.Controls.Add(navSurface);
             navHolder.Resize += delegate { navSurface.Location = new Point(Math.Max(0, (navHolder.Width - navSurface.Width) / 2), Math.Max(0, (navHolder.Height - navSurface.Height) / 2)); };
             window.Controls.AddRange(new Control[] { min, max, close }); bar.Controls.Add(brand, 0, 0); bar.Controls.Add(navHolder, 1, 0); bar.Controls.Add(window, 2, 0); return bar;
         }
@@ -342,6 +345,7 @@ namespace RouteLens
                 {
                     _snapshot = new NetworkSnapshot { Connections = new List<ConnectionInfo>(), CapturedAt = DateTime.Now, Error = ex.Message, SourceName = clash ? "Clash 原始连接" : "Windows 系统连接", SourceStatus = "读取失败：" + ex.Message };
                     _traffic.Update(_snapshot);
+                    _evidence.RecordSample(_snapshot);
                     _history.ResetBaseline();
                     _alerts.ResetBaseline();
                     RenderView();
@@ -354,6 +358,7 @@ namespace RouteLens
         private async Task ChangeSourceAsync()
         {
             _sourceGeneration++; _snapshot = null; _countryCode = null; _traffic.Reset(); _history.ResetBaseline(); _alerts.ResetBaseline();
+            _evidence.SetState(_paused ? "已暂停" : "等待采样", "切换数据源后等待新的快照。", UseClash ? "Clash 原始连接" : "Windows 系统连接");
             _sampleTimer.Interval = UseClash ? 1000 : 2000;
             _includeUdp.Text = UseClash ? "UDP 连接" : "UDP 端点"; _includeUdp.Checked = UseClash;
             RenderView();
@@ -362,6 +367,7 @@ namespace RouteLens
         private async void PauseClicked(object sender, EventArgs e)
         {
             _paused = !_paused; _sourceGeneration++; _traffic.Reset(); _history.ResetBaseline(); _alerts.ResetBaseline(); _pause.Text = _paused ? "继续采样" : "暂停采样"; ((ModernButton)_pause).IconName = _paused ? "play" : "pause";
+            _evidence.SetState(_paused ? "已暂停" : "等待采样", _paused ? "用户暂停了连接采样，这段时间没有连接快照。" : "恢复后等待新的连接快照。", UseClash ? "Clash 原始连接" : "Windows 系统连接");
             if (_paused && _snapshot != null) _traffic.Update(_snapshot);
             _live.Text = _paused ? "采样已暂停" : "实时监测"; _live.ForeColor = _paused ? UiPalette.Muted : UiPalette.Accent;
             if (_paused) _sampleTimer.Stop(); else { _sampleTimer.Start(); await SampleAsync(); } RenderView();
@@ -660,7 +666,7 @@ namespace RouteLens
         }
         private void AcceptSnapshot(NetworkSnapshot snapshot)
         {
-            _snapshot = snapshot; _traffic.Update(snapshot); _history.Update(snapshot);
+            _snapshot = snapshot; _traffic.Update(snapshot); _history.Update(snapshot); _evidence.RecordSample(snapshot);
             _alerts.Update(snapshot, delegate(string ip) { GeoResult result = _geo.Peek(ip); return result != null && result.Success ? result.CountryCode : null; });
         }
         public void SetSnapshotForTest(NetworkSnapshot snapshot) { AcceptSnapshot(snapshot); RenderView(); }
@@ -681,6 +687,24 @@ namespace RouteLens
         private void ShowPrivacyCheck() { using (PrivacyDnsDialog dialog = new PrivacyDnsDialog()) dialog.ShowDialog(this); }
         private void ShowOfflineGeo() { using (OfflineCountryDialog dialog = new OfflineCountryDialog(_geo.Offline)) dialog.ShowDialog(this); RenderView(); }
         private void ShowActivitySettings() { using (ActivityAlertsDialog dialog = new ActivityAlertsDialog(_alerts)) dialog.ShowDialog(this); }
+        private void UpdateHistoryEvidence()
+        {
+            bool enabled, error, dropped; int skipped, gaps;
+            if (_history.TryGetHealth(out enabled, out error, out dropped, out skipped, out gaps)) _evidence.RecordHistory(enabled, error, dropped, skipped, gaps);
+        }
+        private string SelectedConnectionEvidence()
+        {
+            string id = _grid.CurrentRow == null ? null : _grid.CurrentRow.Tag as string; RowData item;
+            return id != null && _rowData.TryGetValue(id, out item) ? "快照时间：" + (_snapshot == null || _snapshot.CapturedAt == default(DateTime) ? "未知" : _snapshot.CapturedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")) + "\r\n" + ConnectionText(item) : null;
+        }
+        private void ShowEvidence()
+        {
+            EvidenceDialog dialog = null;
+            dialog = new EvidenceDialog(_evidence, SelectedConnectionEvidence,
+                delegate { using (SystemTimelineDialog system = new SystemTimelineDialog()) system.ShowDialog(dialog); }, null,
+                delegate { using (ExternalEvidenceDialog external = new ExternalEvidenceDialog()) external.ShowDialog(dialog); });
+            using (dialog) dialog.ShowDialog(this);
+        }
         private void ShowActivityNotification(string text)
         {
             if (_closing || String.IsNullOrWhiteSpace(text)) return;

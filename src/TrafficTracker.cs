@@ -15,11 +15,20 @@ namespace RouteLens
     public sealed class TrafficReport
     {
         public List<ProgramTraffic> Programs = new List<ProgramTraffic>();
+        public List<TargetTraffic> Targets = new List<TargetTraffic>();
         public bool Available, Measuring;
+        public bool Fresh;
+        public DateTime SnapshotAt;
         public int ConnectionCount, CounterConnectionCount, MeasuredConnectionCount;
         public double DownloadPerSecond, UploadPerSecond;
         public long DownloadBytes, UploadBytes;
         public string Status;
+    }
+
+    public sealed class TargetTraffic
+    {
+        public string Key, Name, Program;
+        public bool Measured, PositiveUpload;
     }
 
     // Retains only the last accepted snapshot. Closing connections leave these totals;
@@ -101,10 +110,12 @@ namespace RouteLens
 
         public TrafficReport Build(IEnumerable<ConnectionInfo> connections, bool paused)
         {
-            TrafficReport report = new TrafficReport { Available = _available };
+            TrafficReport report = new TrafficReport { Available = _available, SnapshotAt = _capturedAt };
             bool fresh = _receivedAt != 0 && (Stopwatch.GetTimestamp() - _receivedAt) / (double)Stopwatch.Frequency <= MaximumIntervalSeconds;
             bool showRates = _available && !paused && fresh;
+            report.Fresh = showRates;
             Dictionary<string, ProgramTraffic> programs = new Dictionary<string, ProgramTraffic>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, TargetTraffic> targets = new Dictionary<string, TargetTraffic>(StringComparer.OrdinalIgnoreCase);
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
             if (connections != null) foreach (ConnectionInfo row in connections)
             {
@@ -121,6 +132,12 @@ namespace RouteLens
                 }
                 program.Connections++;
                 report.ConnectionCount++;
+                string targetName = Text(row.Host).Trim();
+                if (targetName.Length == 0) targetName = Text(row.RemoteAddress).Trim();
+                if (targetName.Length == 0) targetName = "目标未提供";
+                TargetTraffic target;
+                string targetKey = key + "\n" + targetName;
+                if (!targets.TryGetValue(targetKey, out target)) { target = new TargetTraffic { Key = targetKey, Name = targetName, Program = name }; targets.Add(targetKey, target); }
                 if (!_available || !HasCounters(row)) continue;
                 program.CounterConnections++;
                 report.CounterConnectionCount++;
@@ -135,8 +152,11 @@ namespace RouteLens
                     program.DownloadPerSecond += sample.DownloadRate;
                     program.UploadPerSecond += sample.UploadRate;
                     report.MeasuredConnectionCount++;
+                    target.Measured = true;
+                    if (sample.UploadRate > 0) target.PositiveUpload = true;
                 }
             }
+            report.Targets.AddRange(targets.Values);
             foreach (ProgramTraffic program in programs.Values)
             {
                 report.Programs.Add(program);
@@ -157,7 +177,7 @@ namespace RouteLens
             else if (report.ConnectionCount == 0) report.Status = "当前筛选下没有连接。";
             else if (report.CounterConnectionCount == 0) report.Status = "当前连接未提供流量计数。";
             else if (!report.Measuring) report.Status = "等待下一次有效采样；累计仅统计当前存活连接。";
-            else report.Status = "速率覆盖 " + report.MeasuredConnectionCount + " / " + report.ConnectionCount + " 条连接；累计仅统计当前存活连接。";
+            else report.Status = "当前筛选中观察到的 Clash 活动连接：已计速 " + report.MeasuredConnectionCount + " / " + report.ConnectionCount + "；累计仅统计存活连接。";
             if (_available && report.CounterConnectionCount < report.ConnectionCount)
                 report.Status += " " + (report.ConnectionCount - report.CounterConnectionCount) + " 条连接未提供计数。";
             return report;
@@ -180,7 +200,7 @@ namespace RouteLens
         {
             string name, path;
             return Text(row.Protocol) + "\n" + Text(row.LocalAddress) + ":" + row.LocalPort + "\n" +
-                Text(row.RemoteAddress) + ":" + row.RemotePort + "\n" + ProgramKey(row, out name, out path) + "\n" + row.ProcessId;
+                Text(row.RemoteAddress) + ":" + row.RemotePort + "\n" + Text(row.Host) + "\n" + ProgramKey(row, out name, out path) + "\n" + row.ProcessId;
         }
 
         private static string ProgramKey(ConnectionInfo row, out string name, out string path)

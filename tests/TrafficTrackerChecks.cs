@@ -155,6 +155,21 @@ internal static class TrafficTrackerChecksV6
         Check(report.Available && !report.Measuring && report.ConnectionCount == 0 && report.Status.Contains("没有连接"), "empty filter accurate");
         tracker.Update(null);
         Check(!tracker.Build(null, false).Available, "null snapshot clears state safely");
+        ConnectionInfo ta = Row("target-a", 100, 100), tb = Row("target-b", 100, 100), tc = Row("target-c", 100, 100);
+        ta.Host = "upload.example"; tb.Host = "idle.example"; tc.Host = "unknown.example"; tc.HasTrafficCounters = false;
+        Accept(tracker, Snapshot(40, ta, tb, tc));
+        ta = Row("target-a", 200, 150); tb = Row("target-b", 200, 100); tc = Row("target-c", 200, 200);
+        ta.Host = "upload.example"; tb.Host = "idle.example"; tc.Host = "unknown.example"; tc.HasTrafficCounters = false;
+        report = Accept(tracker, Snapshot(41, ta, tb, tc));
+        Check(report.Fresh && report.Targets.Count == 3, "fresh observed targets returned");
+        Check(report.Targets.Find(x => x.Name == "upload.example").PositiveUpload, "upload target requires positive measured upload delta");
+        Check(report.Targets.Find(x => x.Name == "idle.example").Measured && !report.Targets.Find(x => x.Name == "idle.example").PositiveUpload, "zero upload is not classified as positive");
+        Check(!report.Targets.Find(x => x.Name == "unknown.example").Measured && !report.Targets.Find(x => x.Name == "unknown.example").PositiveUpload, "missing counter is not classified as uploaded");
+        report = tracker.Build(new[] { ta, tb, tc }, true);
+        Check(!report.Fresh && !report.Targets.Exists(x => x.PositiveUpload), "paused target observations cannot claim current upload");
+        ConnectionInfo changedHost = Row("target-a", 300, 250); changedHost.Host = "other.example";
+        report = Accept(tracker, Snapshot(42, changedHost));
+        Check(!report.Measuring && !report.Targets[0].PositiveUpload, "changed host cannot inherit earlier target's upload delta");
         Console.WriteLine("Traffic tracker passed " + checks + " checks.");
     }
 }

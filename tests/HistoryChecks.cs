@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Threading;
 using RouteLens;
 
 internal static class HistoryChecks
@@ -33,7 +35,23 @@ internal static class HistoryChecks
                 Check(store.LastError == null && File.Exists(store.DatabasePath), "SQLite opening failed: " + store.LastError);
                 store.Update(Snapshot(time, Row("a", "a.example.org", 100, 10), Row("b", "b.example.org", 300, 20)));
                 Check(store.GetReport(1, "program").DownloadBytes == 0, "First sample was counted");
+                object gate = typeof(HistoryStore).GetField("_gate", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(store);
+                using (ManualResetEvent locked = new ManualResetEvent(false))
+                using (ManualResetEvent release = new ManualResetEvent(false))
+                {
+                    Thread holder = new Thread(delegate() { lock (gate) { locked.Set(); release.WaitOne(); } });
+                    holder.Start();
+                    try
+                    {
+                        Check(locked.WaitOne(5000), "Test lock could not be acquired");
+                        store.Update(Snapshot(time.AddMilliseconds(500), Row("a", "a.example.org", 500, 30), Row("b", "b.example.org", 400, 25)));
+                    }
+                    finally { release.Set(); holder.Join(); }
+                }
+                bool healthEnabled, healthError, healthDropped; int skipped, gaps;
+                Check(store.TryGetHealth(out healthEnabled, out healthError, out healthDropped, out skipped, out gaps) && skipped == 1 && gaps == 0, "Busy skipped sample was not counted separately from a gap");
                 store.Update(Snapshot(time.AddSeconds(1), Row("a", "a.example.org", 800, 50), Row("b", "b.example.org", 600, 30)));
+                Check(store.TryGetHealth(out healthEnabled, out healthError, out healthDropped, out skipped, out gaps) && gaps == 0, "A recoverable skipped sample was falsely counted as a gap");
                 HistoryReport program = store.GetReport(1, "program");
                 Check(program.Available && program.DownloadBytes == 1000 && program.UploadBytes == 50, "Delta totals incorrect");
                 Check(program.Entries.Count == 1 && program.Entries[0].DownloadBytes == 1000, "Same path did not aggregate processes");
@@ -62,7 +80,9 @@ internal static class HistoryChecks
                 store.Update(new NetworkSnapshot { CapturedAt = time.AddSeconds(8), ClashConnected = false, Connections = new List<ConnectionInfo>() });
                 store.Update(Snapshot(time.AddSeconds(9), Row("a", "a.example.org", 100000, 90000)));
                 Check(store.GetReport(1, "program").DownloadBytes == 1014, "Failed source was treated as continuous");
+                Check(store.TryGetHealth(out healthEnabled, out healthError, out healthDropped, out skipped, out gaps), "History health unavailable"); int beforeGap = gaps;
                 store.Update(Snapshot(time.AddSeconds(20), Row("a", "a.example.org", 200000, 190000)));
+                Check(store.TryGetHealth(out healthEnabled, out healthError, out healthDropped, out skipped, out gaps) && gaps == beforeGap + 1, "Invalid interval failed to record gap");
                 Check(store.GetReport(1, "program").DownloadBytes == 1014, "Stale time gap counted");
                 store.Flush();
             }

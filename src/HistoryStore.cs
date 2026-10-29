@@ -38,8 +38,10 @@ namespace RouteLens
         private readonly Dictionary<string, Sample> _samples = new Dictionary<string, Sample>(StringComparer.Ordinal);
         private readonly Dictionary<string, Pending> _pending = new Dictionary<string, Pending>(StringComparer.Ordinal);
         private IntPtr _database;
-        private bool _enabled, _disposed, _flushQueued;
+        private volatile bool _enabled;
+        private bool _disposed, _flushQueued;
         private int _dropped;
+        private int _busySamplesSkipped, _baselineGaps;
         private int _retentionDays = 30;
         private string _source, _error;
         private DateTime _capturedAt, _lastPruned;
@@ -91,27 +93,37 @@ namespace RouteLens
             }
         }
         public string LastError { get { lock (_gate) return _error; } }
+        // The status panel must never wait behind database I/O on the UI thread.
+        public bool TryGetHealth(out bool enabled, out bool error, out bool dropped, out int busySamplesSkipped, out int baselineGaps)
+        {
+            enabled = false; error = false; dropped = false; busySamplesSkipped = 0; baselineGaps = 0;
+            if (!Monitor.TryEnter(_gate)) return false;
+            try { enabled = _enabled; error = !String.IsNullOrEmpty(_error); dropped = _dropped > 0; busySamplesSkipped = Interlocked.CompareExchange(ref _busySamplesSkipped, 0, 0); baselineGaps = _baselineGaps; return true; }
+            finally { Monitor.Exit(_gate); }
+        }
         public string DatabasePath { get { return _databasePath; } }
-        public void ResetBaseline() { lock (_gate) ResetBaselineLocked(); }
+        public void ResetBaseline() { lock (_gate) { MarkGapLocked(); ResetBaselineLocked(); } }
+        private void MarkGapLocked() { if (_enabled && _capturedAt != default(DateTime) && _receivedAt != 0 && _baselineGaps < Int32.MaxValue) _baselineGaps++; }
         private void ResetBaselineLocked() { _samples.Clear(); _capturedAt = default(DateTime); _receivedAt = 0; _source = null; }
 
         public void Update(NetworkSnapshot snapshot)
         {
             // A large report or a busy database must not stall the live UI. The next
             // accepted snapshot can still account for the interval if it remains fresh.
-            if (!Monitor.TryEnter(_gate)) return;
+            if (!Monitor.TryEnter(_gate)) { if (_enabled) Interlocked.Increment(ref _busySamplesSkipped); return; }
             try
             {
                 if (_disposed || !_enabled) return;
                 if (snapshot == null || !snapshot.ClashConnected || !String.IsNullOrWhiteSpace(snapshot.Error) || snapshot.Connections == null)
-                { ResetBaselineLocked(); return; }
+                { MarkGapLocked(); ResetBaselineLocked(); return; }
                 if (_database == IntPtr.Zero && !OpenDatabaseLocked()) return;
-                if (!AcquireWriterLocked()) { ResetBaselineLocked(); return; }
+                if (!AcquireWriterLocked()) { MarkGapLocked(); ResetBaselineLocked(); return; }
                 string source = Text(snapshot.SourceName) + "\n" + Text(snapshot.ControllerSummary);
                 double seconds = (snapshot.CapturedAt - _capturedAt).TotalSeconds;
                 bool interval = _capturedAt != default(DateTime) && snapshot.CapturedAt != default(DateTime) && _receivedAt != 0 &&
                     String.Equals(_source, source, StringComparison.Ordinal) && seconds > 0 && seconds <= MaximumIntervalSeconds &&
                     (Stopwatch.GetTimestamp() - _receivedAt) / (double)Stopwatch.Frequency <= MaximumIntervalSeconds;
+                if (!interval) MarkGapLocked();
                 Dictionary<string, int> counts = new Dictionary<string, int>(StringComparer.Ordinal);
                 foreach (ConnectionInfo row in snapshot.Connections)
                 {
