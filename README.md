@@ -1,8 +1,10 @@
 # RouteLens
 
-RouteLens 是一款开源 Windows 网络观察工具。从 Clash / Mihomo 读取活动连接，在一个界面中查看程序、域名、目标地区、实际代理链和流量变化，并提供地图、DNS 检测与可选的本地历史记录。
+RouteLens 是一款开源 Windows 网络观察工具。项目的一个重要动机是**辅助调查电脑是否可能被恶意控制、充当参与 DDoS 攻击的“肉鸡”**：观察可见的异常外连或持续上传，并结合程序、目标、已有系统事件和采集缺口，为进一步调查提供线索。
 
-RouteLens is an open-source Windows network monitor for Clash / Mihomo, with connection and traffic views, a world map, DNS checks, and optional local history.
+软件从 Clash / Mihomo 读取活动连接，在一个界面中查看程序、域名、目标地区、实际代理链和流量变化，并提供地图、DNS 检测与可选的本地历史记录。
+
+RouteLens is an open-source Windows network monitor for Clash / Mihomo. One motivation is to help investigate whether a computer may be controlled and used as part of a DDoS botnet, by presenting observable network activity and available process and system evidence. It does not automatically determine infection or prove an attack.
 
 ## 下载与运行
 
@@ -38,7 +40,7 @@ RouteLens is an open-source Windows network monitor for Clash / Mihomo, with con
 
 实时速度和历史流量来自 Clash 活动连接累计字节的连续采样差值；短连接可能遗漏，不代表整机或计费流量。网卡窗口显示每张接口的独立速度，不将虚拟、隧道与物理网卡相加以免重复计算，也不能归因到程序。地图采用国家级代表点，不能视为服务器精确位置或 VPN 出口实测位置。
 
-持续上传是观察条件，不是感染或攻击判定；状态页所示计速连接和缺口不代表全机覆盖率。外部导入目前仅支持本地 Zeek JSON 连接日志，来源未经独立验证；尚未实现正式的 ETW 全机逐进程采集或服务及计划任务配置快照。系统日志读取依赖已有记录及权限；读取不到或没有记录不代表事件未发生。`experiments/etw/` 是独立研究原型，没有集成到程序中。
+持续上传是观察条件，单凭流量或连接不能确认感染、攻击或参与 DDoS；状态页所示计速连接和缺口不代表全机覆盖率，也不能排除隐蔽或尚未活动的恶意程序。外部导入目前仅支持本地 Zeek JSON 连接日志，来源未经独立验证；尚未实现正式的 ETW 全机逐进程采集或服务及计划任务配置快照。系统日志读取依赖已有记录及权限；读取不到或没有记录不代表事件未发生。`experiments/etw/` 是独立研究原型，没有集成到程序中。
 
 被动 DNS 检查只覆盖物理 IPv4 接口上的明文 DNS，不覆盖 IPv6、DoH、DoT 等路径；主动测试只反映测试请求自身的路径。未观察到异常不等于不存在泄露，解析服务器与出口的地区不同也不足以单独证明泄露。详细说明见 [使用说明](使用说明.md)。
 
@@ -46,7 +48,7 @@ RouteLens is an open-source Windows network monitor for Clash / Mihomo, with con
 
 ## 意见与反馈
 
-欢迎在 [GitHub Issues](https://github.com/0d000721inme/RouteLens/issues) 分享使用体验、报告错误或提出功能建议。反馈时请说明 Windows 与 RouteLens 版本、复现步骤和预期结果；截图、日志或导出内容请先检查并删除 IP、域名、用户名、密钥及其他不希望公开的信息。
+欢迎在 [DDoS 肉鸡调查功能征集帖](https://github.com/0d000721inme/RouteLens/issues/1) 分享使用体验和建议，也可通过 [GitHub Issues](https://github.com/0d000721inme/RouteLens/issues) 报告错误。尤其欢迎对证据关联、采集盲区和误报的建议。反馈时请说明 Windows 与 RouteLens 版本、复现步骤和预期结果；截图、日志或导出内容请先检查并删除 IP、域名、用户名、密钥及其他不希望公开的信息。
 
 ## 从源码构建
 
