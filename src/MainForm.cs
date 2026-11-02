@@ -19,6 +19,7 @@ namespace RouteLens
         private readonly HistoryStore _history;
         private readonly ActivityAlerts _alerts = new ActivityAlerts();
         private readonly EvidenceMonitor _evidence = new EvidenceMonitor();
+        private readonly InvestigationMonitor _investigation = new InvestigationMonitor();
         private List<ConnectionInfo> _trafficConnections = new List<ConnectionInfo>();
         private MapExplorerSnapshot _mapSnapshot = new MapExplorerSnapshot { Countries = new List<CountryStat>(), Connections = new List<MapConnection>(), SourceUnavailable = true, SourceStatus = "正在读取连接" };
         private readonly Timer _sampleTimer = new Timer();
@@ -46,11 +47,19 @@ namespace RouteLens
         private Label _detailHost, _detailRoute, _detailRule, _detailAttribution, _detailTraffic, _detailPath, _detailInbound;
         private TableLayoutPanel _workspace;
         private TableLayoutPanel _rootLayout;
+        private Panel _pageHost;
+        private Control _currentPage;
+        private string _activePage = "connections";
+        private readonly Dictionary<string, Form> _pages = new Dictionary<string, Form>();
+        private readonly Dictionary<string, ModernButton> _navigation = new Dictionary<string, ModernButton>();
+        private static readonly string[] PageOrder = { "connections", "traffic", "history", "map", "privacy", "offline", "alerts", "evidence", "investigation" };
+        private PageTransition _pageTransition;
         private RoundedPanel _inspector;
         private CountryBreakdown _countryChart;
         private WorldMapControl _worldMap;
         private ConnectionGrid _grid;
         private float _dpiScale = 1f;
+        private bool _updatingChrome;
 
         [DllImport("user32.dll")] private static extern bool ReleaseCapture();
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
@@ -62,6 +71,7 @@ namespace RouteLens
         {
             if (geo == null) throw new ArgumentNullException("geo");
             _geo = geo; _history = new HistoryStore(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data"));
+            _investigation.CaseCreated += delegate(InvestigationCase item) { if (item.Kind == "sustained-upload") _evidence.RecordInvestigation(); };
             _alerts.Alert += delegate(string message) { if (message != null && message.IndexOf("持续上传", StringComparison.Ordinal) >= 0) _evidence.RecordUploadAlert(_alerts.SustainedUploadBytesPerSecond, _alerts.SustainedUploadSeconds); else _evidence.RecordAlert(message); ShowActivityNotification(message); }; Text = "RouteLens · 网络观察";
             BackColor = UiPalette.Canvas; ForeColor = UiPalette.Ink; Font = UiPalette.Body(10);
             AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96f, 96f);
@@ -69,7 +79,7 @@ namespace RouteLens
             StartPosition = FormStartPosition.CenterScreen; DoubleBuffered = true; KeyPreview = true;
             BuildInterface();
             _sampleTimer.Interval = 1000; _sampleTimer.Tick += async delegate { await SampleAsync(); };
-            _viewTimer.Interval = 1000; _viewTimer.Tick += delegate { _evidence.CheckStale(); UpdateHistoryEvidence(); RenderView(); };
+            _viewTimer.Interval = 1000; _viewTimer.Tick += delegate { _evidence.CheckStale(); if (_evidence.State == "采样延迟") _investigation.Interrupt("超过 5 秒没有新快照；连续观察已中断。"); UpdateHistoryEvidence(); RenderView(); };
             Shown += async delegate
             {
                 using (Graphics graphics = CreateGraphics()) _dpiScale = graphics.DpiX / 96f;
@@ -85,6 +95,7 @@ namespace RouteLens
             Resize += delegate { AdaptWorkspace(); Invalidate(); };
             KeyDown += delegate(object sender, KeyEventArgs e)
             {
+                if (_activePage != "connections") return;
                 if (e.Control && e.KeyCode == Keys.F) { _search.Focus(); _search.SelectAll(); e.SuppressKeyPress = true; }
                 else if (e.KeyCode == Keys.Escape) { _search.Clear(); ClearCountry(); e.SuppressKeyPress = true; }
             };
@@ -97,7 +108,18 @@ namespace RouteLens
             _rootLayout = root;
             foreach (int height in new[] { 58, 58, 300, 56, 42 }) root.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 33)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 27));
-            Controls.Add(root); root.Controls.Add(BuildTitleBar(), 0, 0);
+            // The original connection view keeps its row indices; navigation now
+            // lives above every page instead of being part of this view.
+            root.RowStyles[0].Height = 0;
+            TableLayoutPanel shell = Table(1); shell.RowCount = 2; shell.RowStyles.Clear();
+            shell.RowStyles.Add(new RowStyle(SizeType.Absolute, 58)); shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            Panel titleHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(26, 0, 26, 0), Margin = new Padding(0) };
+            titleHost.Controls.Add(BuildTitleBar()); shell.Controls.Add(titleHost, 0, 0);
+            _pageHost = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), BackColor = UiPalette.Canvas };
+            _pageHost.Controls.Add(root); _currentPage = root;
+            _pageTransition = new PageTransition { Dock = DockStyle.Fill };
+            _pageHost.Controls.Add(_pageTransition);
+            shell.Controls.Add(_pageHost, 0, 1); Controls.Add(shell);
 
             TableLayoutPanel intro = Table(2);
             intro.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); intro.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 296));
@@ -213,9 +235,9 @@ namespace RouteLens
             ModernButton max = (ModernButton)ButtonAt("", "maximize", 40, 36, false); max.Quiet = true; max.AccessibleName = "最大化或还原"; max.Click += delegate { ToggleMaximize(); };
             ModernButton close = (ModernButton)ButtonAt("", "close", 40, 36, false); close.Quiet = true; close.AccessibleName = "关闭"; close.Click += delegate { Close(); };
             Panel navHolder = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
-            RoundedPanel navSurface = new RoundedPanel { Width = 524, Height = 42, Radius = 15, SurfaceColor = UiPalette.Raised, BorderColor = UiPalette.Raised, Padding = new Padding(4), Margin = new Padding(0) };
+            RoundedPanel navSurface = new RoundedPanel { Width = 610, Height = 42, Radius = 15, SurfaceColor = UiPalette.Raised, BorderColor = UiPalette.Raised, Padding = new Padding(4), Margin = new Padding(0) };
             FlowLayoutPanel nav = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = UiPalette.Raised, WrapContents = false, Margin = new Padding(0), Padding = new Padding(0) };
-            ModernButton connections = NavButton("连接", 58, false); connections.Click += delegate { if (_grid != null) _grid.Focus(); };
+            ModernButton connections = NavButton("连接", 58, false); connections.Click += delegate { ShowConnections(); };
             _trafficButton = NavButton("实时流量", 68, true); _trafficButton.Click += delegate { ShowTrafficRanking(); };
             ModernButton history = NavButton("历史流量", 68, true); history.Click += delegate { ShowHistory(); };
             ModernButton map = NavButton("世界地图", 68, true); map.Click += delegate { ShowMapExplorer(); };
@@ -223,18 +245,67 @@ namespace RouteLens
             ModernButton offline = NavButton("离线地区", 68, true); offline.Click += delegate { ShowOfflineGeo(); };
             ModernButton alerts = NavButton("提醒", 58, true); alerts.Click += delegate { ShowActivitySettings(); };
             ModernButton evidence = NavButton("证据", 58, true); evidence.Click += delegate { ShowEvidence(); };
+            ModernButton investigate = NavButton("行为调查", 88, true); investigate.Click += delegate { ShowInvestigation(); };
+            ModernButton[] pageButtons = { connections, (ModernButton)_trafficButton, history, map, privacy, offline, alerts, evidence, investigate };
+            for (int i = 0; i < PageOrder.Length; i++) _navigation.Add(PageOrder[i], pageButtons[i]);
+            UpdateNavigation();
             _tips.SetToolTip(_trafficButton, "查看按程序汇总的实时下载和上传速度");
             _tips.SetToolTip(history, "按程序、域名和节点查看本机流量历史");
             _tips.SetToolTip(privacy, "打开主动 DNS 检测；未点击开始时不会发起测试");
             _tips.SetToolTip(offline, "管理本地 IP 地理位置数据库");
             _tips.SetToolTip(evidence, "查看采集状态、连接证据和系统变更");
-            nav.Controls.AddRange(new Control[] { connections, _trafficButton, history, map, privacy, offline, alerts, evidence }); navSurface.Controls.Add(nav); navHolder.Controls.Add(navSurface);
+            _tips.SetToolTip(investigate, "按程序组观察持续上传、复核调查记录与导出；自动观察默认关闭");
+            nav.Controls.AddRange(new Control[] { connections, _trafficButton, history, map, privacy, offline, alerts, evidence, investigate }); navSurface.Controls.Add(nav); navHolder.Controls.Add(navSurface);
             navHolder.Resize += delegate { navSurface.Location = new Point(Math.Max(0, (navHolder.Width - navSurface.Width) / 2), Math.Max(0, (navHolder.Height - navSurface.Height) / 2)); };
             window.Controls.AddRange(new Control[] { min, max, close }); bar.Controls.Add(brand, 0, 0); bar.Controls.Add(navHolder, 1, 0); bar.Controls.Add(window, 2, 0); return bar;
         }
         private static ModernButton NavButton(string text, int width, bool quiet)
         { return new ModernButton { Text = text, Width = width, Height = 34, Quiet = quiet, CornerRadius = 11, Margin = new Padding(0), Padding = new Padding(4, 0, 4, 0), Font = UiPalette.Body(9), AccessibleName = text }; }
-        private void ToggleMaximize() { MaximizedBounds = Screen.FromHandle(Handle).WorkingArea; WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized; }
+        private void ToggleMaximize() { WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized; }
+
+        private void UpdateNavigation()
+        {
+            foreach (KeyValuePair<string, ModernButton> entry in _navigation)
+            {
+                bool selected = entry.Key == _activePage;
+                entry.Value.Primary = selected; entry.Value.Quiet = !selected;
+                entry.Value.AccessibleDescription = selected ? "当前页面" : "切换到" + entry.Value.Text + "页面";
+            }
+        }
+        private static IEnumerable<Control> PageControls(Control parent)
+        {
+            foreach (Control child in parent.Controls) { yield return child; foreach (Control nested in PageControls(child)) yield return nested; }
+        }
+        private void NavigatePage(string key, Func<Form> create)
+        {
+            if (_closing || _activePage == key) return;
+            Control next = _rootLayout;
+            if (key != "connections")
+            {
+                Form page;
+                if (!_pages.TryGetValue(key, out page))
+                {
+                    page = create(); page.TopLevel = false; page.FormBorderStyle = FormBorderStyle.None;
+                    page.ShowInTaskbar = false; page.MinimumSize = Size.Empty; page.MaximumSize = Size.Empty;
+                    page.Dock = DockStyle.Fill; page.Margin = new Padding(0); page.CancelButton = null;
+                    foreach (Button button in PageControls(page).OfType<Button>())
+                    {
+                        if (button.DialogResult == DialogResult.None) continue;
+                        button.DialogResult = DialogResult.None; button.Text = "返回连接"; button.AccessibleName = "返回连接页面";
+                        button.Click += delegate { ShowConnections(); };
+                    }
+                    _pages.Add(key, page); _pageHost.Controls.Add(page);
+                }
+                next = page;
+            }
+            _pageTransition.Stop();
+            Bitmap outgoing = PageTransition.Capture(_currentPage);
+            _currentPage.Hide(); _currentPage = next; _activePage = key;
+            next.Show(); next.BringToFront(); next.PerformLayout();
+            UpdateNavigation(); _navigation[key].Focus();
+            _pageTransition.Play(outgoing, next);
+        }
+        private void ShowConnections() { NavigatePage("connections", null); }
 
         private void BuildGrid()
         {
@@ -258,7 +329,7 @@ namespace RouteLens
             AddTextColumn("state", "状态", 13, 87); _grid.Columns["state"].Visible = false;
             _grid.CellPainting += PaintGridCell; _grid.SelectionChanged += delegate { if (!_updatingRows) RenderInspector(); };
             _grid.DataError += delegate(object sender, DataGridViewDataErrorEventArgs e) { e.ThrowException = false; };
-            ContextMenuStrip menu = new ContextMenuStrip(); menu.Items.Add("复制目标 IP", null, delegate { CopySelectedIp(); }); menu.Items.Add("复制连接信息", null, delegate { CopySelectedConnection(); }); _grid.ContextMenuStrip = menu;
+            ContextMenuStrip menu = new ContextMenuStrip(); menu.Items.Add("复制目标 IP", null, delegate { CopySelectedIp(); }); menu.Items.Add("复制连接信息", null, delegate { CopySelectedConnection(); }); menu.Items.Add("加入行为调查", null, delegate { CaptureSelectedInvestigation(); }); _grid.ContextMenuStrip = menu;
             _grid.CellMouseDown += delegate(object sender, DataGridViewCellMouseEventArgs e) { if (e.Button == MouseButtons.Right && e.RowIndex >= 0) { _grid.ClearSelection(); _grid.CurrentCell = _grid.Rows[e.RowIndex].Cells[0]; _grid.Rows[e.RowIndex].Selected = true; } };
             _grid.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs e) { if (e.RowIndex >= 0) ShowConnectionDetails(); };
             _grid.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.Control && e.KeyCode == Keys.C) { CopySelectedConnection(); e.SuppressKeyPress = true; } };
@@ -348,6 +419,7 @@ namespace RouteLens
                     _evidence.RecordSample(_snapshot);
                     _history.ResetBaseline();
                     _alerts.ResetBaseline();
+                    _investigation.Interrupt("连接读取失败；此时段没有可用采样。");
                     RenderView();
                 }
             }
@@ -358,6 +430,7 @@ namespace RouteLens
         private async Task ChangeSourceAsync()
         {
             _sourceGeneration++; _snapshot = null; _countryCode = null; _traffic.Reset(); _history.ResetBaseline(); _alerts.ResetBaseline();
+            _investigation.Interrupt("切换数据源；等待新的连续采样。");
             _evidence.SetState(_paused ? "已暂停" : "等待采样", "切换数据源后等待新的快照。", UseClash ? "Clash 原始连接" : "Windows 系统连接");
             _sampleTimer.Interval = UseClash ? 1000 : 2000;
             _includeUdp.Text = UseClash ? "UDP 连接" : "UDP 端点"; _includeUdp.Checked = UseClash;
@@ -367,6 +440,7 @@ namespace RouteLens
         private async void PauseClicked(object sender, EventArgs e)
         {
             _paused = !_paused; _sourceGeneration++; _traffic.Reset(); _history.ResetBaseline(); _alerts.ResetBaseline(); _pause.Text = _paused ? "继续采样" : "暂停采样"; ((ModernButton)_pause).IconName = _paused ? "play" : "pause";
+            _investigation.Interrupt(_paused ? "用户暂停采样；此时段未观察。" : "恢复采样；重新建立基线。");
             _evidence.SetState(_paused ? "已暂停" : "等待采样", _paused ? "用户暂停了连接采样，这段时间没有连接快照。" : "恢复后等待新的连接快照。", UseClash ? "Clash 原始连接" : "Windows 系统连接");
             if (_paused && _snapshot != null) _traffic.Update(_snapshot);
             _live.Text = _paused ? "采样已暂停" : "实时监测"; _live.ForeColor = _paused ? UiPalette.Muted : UiPalette.Accent;
@@ -661,12 +735,17 @@ namespace RouteLens
                 Panel bottom = new Panel { Dock = DockStyle.Bottom, Height = 52, Padding = new Padding(0, 14, 0, 0) };
                 Button close = ButtonAt("关闭", "close", 90, 36, false); close.Dock = DockStyle.Right; close.DialogResult = DialogResult.OK;
                 Button copy = ButtonAt("复制全部", "copy", 116, 36, false); copy.Dock = DockStyle.Left; copy.Click += delegate { try { Clipboard.SetText(text.Text); copy.Text = "已复制"; } catch (ExternalException) { copy.Text = "请重试"; } };
-                bottom.Controls.Add(close); bottom.Controls.Add(copy); details.Controls.Add(text); details.Controls.Add(bottom); details.AcceptButton = close; details.CancelButton = close; details.ShowDialog(this);
+                Button investigate = ButtonAt("加入调查", "search", 124, 36, false); investigate.Dock = DockStyle.Left;
+                NetworkSnapshot capturedSnapshot = _snapshot; ConnectionInfo capturedConnection = item.Connection;
+                investigate.Click += delegate { _investigation.CaptureConnection(capturedSnapshot, capturedConnection); investigate.Enabled = false; investigate.Text = "已加入调查"; };
+                bottom.Controls.Add(close); bottom.Controls.Add(investigate); bottom.Controls.Add(copy); details.Controls.Add(text); details.Controls.Add(bottom); details.AcceptButton = close; details.CancelButton = close; details.ShowDialog(this);
             }
         }
         private void AcceptSnapshot(NetworkSnapshot snapshot)
         {
             _snapshot = snapshot; _traffic.Update(snapshot); _history.Update(snapshot); _evidence.RecordSample(snapshot);
+            // Always use all source connections, independent of search/country/UDP UI filters.
+            _investigation.Observe(snapshot, _traffic.Build(snapshot == null ? null : snapshot.Connections, _paused));
             _alerts.Update(snapshot, delegate(string ip) { GeoResult result = _geo.Peek(ip); return result != null && result.Success ? result.CountryCode : null; });
         }
         public void SetSnapshotForTest(NetworkSnapshot snapshot) { AcceptSnapshot(snapshot); RenderView(); }
@@ -681,12 +760,25 @@ namespace RouteLens
         }
         private void ShowTrafficRanking()
         {
-            using (TrafficRankingDialog dialog = new TrafficRankingDialog(GetTrafficReport, delegate { return _paused; })) dialog.ShowDialog(this);
+            NavigatePage("traffic", delegate { return new TrafficRankingDialog(GetTrafficReport, delegate { return _paused; }); });
         }
-        private void ShowHistory() { using (HistoryDialog dialog = new HistoryDialog(_history)) dialog.ShowDialog(this); }
-        private void ShowPrivacyCheck() { using (PrivacyDnsDialog dialog = new PrivacyDnsDialog()) dialog.ShowDialog(this); }
-        private void ShowOfflineGeo() { using (OfflineCountryDialog dialog = new OfflineCountryDialog(_geo.Offline)) dialog.ShowDialog(this); RenderView(); }
-        private void ShowActivitySettings() { using (ActivityAlertsDialog dialog = new ActivityAlertsDialog(_alerts)) dialog.ShowDialog(this); }
+        private void ShowHistory() { NavigatePage("history", delegate { return new HistoryDialog(_history); }); }
+        private void ShowPrivacyCheck() { NavigatePage("privacy", delegate { return new PrivacyDnsDialog(); }); }
+        private void ShowOfflineGeo() { NavigatePage("offline", delegate { return new OfflineCountryDialog(_geo.Offline); }); }
+        private void ShowActivitySettings() { NavigatePage("alerts", delegate { return new ActivityAlertsDialog(_alerts); }); }
+        private void ShowInvestigation()
+        {
+            NavigatePage("investigation", delegate { return new InvestigationDialog(_investigation, delegate { ShowEvidence(); },
+                delegate { using (SystemTimelineDialog system = new SystemTimelineDialog()) system.ShowDialog(this); },
+                delegate { using (ExternalEvidenceDialog external = new ExternalEvidenceDialog()) external.ShowDialog(this); }); });
+        }
+        private void CaptureSelectedInvestigation()
+        {
+            string id = _grid.CurrentRow == null ? null : _grid.CurrentRow.Tag as string; RowData item;
+            if (id == null || !_rowData.TryGetValue(id, out item) || _snapshot == null) return;
+            _investigation.CaptureConnection(_snapshot, item.Connection);
+            ShowInvestigation();
+        }
         private void UpdateHistoryEvidence()
         {
             bool enabled, error, dropped; int skipped, gaps;
@@ -699,11 +791,9 @@ namespace RouteLens
         }
         private void ShowEvidence()
         {
-            EvidenceDialog dialog = null;
-            dialog = new EvidenceDialog(_evidence, SelectedConnectionEvidence,
-                delegate { using (SystemTimelineDialog system = new SystemTimelineDialog()) system.ShowDialog(dialog); }, null,
-                delegate { using (ExternalEvidenceDialog external = new ExternalEvidenceDialog()) external.ShowDialog(dialog); });
-            using (dialog) dialog.ShowDialog(this);
+            NavigatePage("evidence", delegate { return new EvidenceDialog(_evidence, SelectedConnectionEvidence,
+                delegate { using (SystemTimelineDialog system = new SystemTimelineDialog()) system.ShowDialog(this); }, null,
+                delegate { using (ExternalEvidenceDialog external = new ExternalEvidenceDialog()) external.ShowDialog(this); }); });
         }
         private void ShowActivityNotification(string text)
         {
@@ -718,15 +808,51 @@ namespace RouteLens
         }
         private void ShowMapExplorer()
         {
-            using (MapExplorerDialog dialog = new MapExplorerDialog(delegate { return _mapSnapshot; }, delegate(string code)
+            NavigatePage("map", delegate { return new MapExplorerDialog(delegate { return _mapSnapshot; }, delegate(string code)
             {
                 _countryCode = String.IsNullOrWhiteSpace(code) ? null : code;
                 RenderConnections();
-            })) dialog.ShowDialog(this);
+            }); });
         }
         protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.Style |= 0x00080000 | 0x00020000 | 0x00010000; return p; } }
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            using (Graphics graphics = CreateGraphics()) _dpiScale = graphics.DpiX / 96f;
+            UpdateWindowChrome();
+        }
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e); UpdateWindowChrome();
+        }
+        private void UpdateWindowChrome()
+        {
+            if (!IsHandleCreated || _updatingChrome || IsDisposed) return;
+            _updatingChrome = true;
+            try
+            {
+                // Docked pages must not cover the form's resize hit targets.
+                int edge = WindowState == FormWindowState.Normal ? Math.Max(6, (int)Math.Ceiling(8 * _dpiScale)) : 0;
+                Padding padding = new Padding(edge);
+                if (Padding != padding) Padding = padding;
+                WindowChrome.ApplyCorners(this, _dpiScale);
+            }
+            finally { _updatingChrome = false; }
+            Invalidate();
+        }
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (keyData == (Keys.Control | Keys.Tab) || keyData == (Keys.Control | Keys.Shift | Keys.Tab))
+            {
+                int current = Array.IndexOf(PageOrder, _activePage);
+                int direction = (keyData & Keys.Shift) == Keys.Shift ? -1 : 1;
+                _navigation[PageOrder[(current + direction + PageOrder.Length) % PageOrder.Length]].PerformClick(); return true;
+            }
+            if (keyData == (Keys.Control | Keys.F) && _activePage != "connections")
+            {
+                TextBox search = PageControls(_currentPage).OfType<TextBox>().FirstOrDefault(x => x.Visible && !x.ReadOnly && (x.AccessibleName ?? "").Contains("搜索"));
+                if (search != null) { search.Focus(); search.SelectAll(); return true; }
+            }
             if (keyData == (Keys.Alt | Keys.Space))
             {
                 Point where = PointToScreen(new Point(8, (int)(48 * _dpiScale))); IntPtr menu = GetSystemMenu(Handle, false);
@@ -735,19 +861,42 @@ namespace RouteLens
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }
-        protected override void OnPaint(PaintEventArgs e) { base.OnPaint(e); using (Pen p = new Pen(UiPalette.Border)) e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1); }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (WindowState != FormWindowState.Normal || Width < 2 || Height < 2) return;
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (Pen pen = new Pen(UiPalette.Border))
+            using (System.Drawing.Drawing2D.GraphicsPath path = UiPaint.RoundedPath(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), (Region == null ? 8 : 12) * _dpiScale))
+                e.Graphics.DrawPath(pen, path);
+        }
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == 0x84 && WindowState == FormWindowState.Normal)
             {
                 base.WndProc(ref m); long packed = m.LParam.ToInt64();
-                Point p = PointToClient(new Point((short)(packed & 0xffff), (short)((packed >> 16) & 0xffff))); int edge = (int)(6 * _dpiScale);
-                bool left = p.X < edge, right = p.X >= ClientSize.Width - edge, top = p.Y < edge, bottom = p.Y >= ClientSize.Height - edge;
-                if (top && left) m.Result = new IntPtr(13); else if (top && right) m.Result = new IntPtr(14); else if (bottom && left) m.Result = new IntPtr(16); else if (bottom && right) m.Result = new IntPtr(17); else if (left) m.Result = new IntPtr(10); else if (right) m.Result = new IntPtr(11); else if (top) m.Result = new IntPtr(12); else if (bottom) m.Result = new IntPtr(15); return;
+                Point p = PointToClient(new Point((short)(packed & 0xffff), (short)((packed >> 16) & 0xffff)));
+                int hit = WindowChrome.HitTest(p, ClientSize, Padding.Left);
+                if (hit != 0) m.Result = new IntPtr(hit);
+                else if (ClientRectangle.Contains(p)) m.Result = new IntPtr(1);
+                return;
             }
             base.WndProc(ref m);
+            if (m.Msg == 0x24) WindowChrome.SetMaximizedWorkArea(Handle, m.LParam);
+            if (m.Msg == 0x84 && WindowState == FormWindowState.Maximized && m.Result.ToInt64() >= 10 && m.Result.ToInt64() <= 17) m.Result = new IntPtr(1);
         }
-        protected override void OnFormClosing(FormClosingEventArgs e) { _closing = true; _sourceGeneration++; _sampleTimer.Stop(); _viewTimer.Stop(); _sampleTimer.Dispose(); _viewTimer.Dispose(); _tips.Dispose(); if (_dnsNotification != null) _dnsNotification.Dispose(); if (_activityNotification != null) _activityNotification.Dispose(); _history.Dispose(); _dns.Dispose(); _clash.Dispose(); _geo.Dispose(); base.OnFormClosing(e); }
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e); if (e.Cancel) return;
+            Form page;
+            if (e.CloseReason == CloseReason.UserClosing && _pages.TryGetValue("investigation", out page) &&
+                !((InvestigationDialog)page).ConfirmDiscardDrafts()) { e.Cancel = true; return; }
+            _closing = true; _sourceGeneration++; _sampleTimer.Stop(); _viewTimer.Stop();
+            _pageTransition.Stop(); foreach (Form cached in _pages.Values) cached.Dispose(); _pages.Clear();
+            _sampleTimer.Dispose(); _viewTimer.Dispose(); _tips.Dispose();
+            if (_dnsNotification != null) _dnsNotification.Dispose(); if (_activityNotification != null) _activityNotification.Dispose();
+            _history.Dispose(); _dns.Dispose(); _clash.Dispose(); _geo.Dispose();
+        }
         private sealed class RowData { public string Id; public ConnectionInfo Connection; public string Process; public string Country; public string Organization; public Image Flag; public GeoResult Geo; }
         private sealed class ConnectionGrid : DataGridView { public ConnectionGrid() { DoubleBuffered = true; } }
     }

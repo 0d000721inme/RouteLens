@@ -11,6 +11,7 @@ namespace RouteLens
         private readonly Label state, detail, info;
         private readonly Button import, download;
         private readonly Timer refresh = new Timer();
+        private bool shown;
 
         public OfflineCountryDialog(OfflineCountryDatabase database)
         {
@@ -67,7 +68,12 @@ namespace RouteLens
             download.Click += async delegate { try { await database.DownloadAsync(); } catch (Exception) { } if (!IsDisposed) Render(); };
             actions.Controls.Add(import, 0, 0); actions.Controls.Add(download, 1, 0); actions.Controls.Add(close, 3, 0); layout.Controls.Add(actions, 0, 4); CancelButton = close;
             refresh.Interval = 500; refresh.Tick += delegate { Render(); };
-            Shown += delegate { Render(); refresh.Start(); };
+            Shown += delegate { shown = true; Render(); refresh.Start(); };
+            VisibleChanged += delegate
+            {
+                if (!shown || IsDisposed || Disposing) return;
+                if (Visible) { Render(); refresh.Start(); } else refresh.Stop();
+            };
             FormClosed += delegate { refresh.Stop(); };
             Render();
         }

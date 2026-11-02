@@ -58,8 +58,17 @@ namespace RouteLens
             FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0), Padding = new Padding(0, 8, 0, 0) };
             Button save = new ModernButton { Text = "保存设置", Width = 120, Height = 38, Primary = true, Margin = new Padding(0, 0, 10, 0) };
             Button cancel = new ModernButton { Text = "取消", Width = 90, Height = 38, DialogResult = DialogResult.Cancel, Margin = new Padding(0) };
-            save.Click += delegate { Apply(); DialogResult = DialogResult.OK; Close(); };
+            save.Click += delegate
+            {
+                Apply();
+                if (TopLevel) { DialogResult = DialogResult.OK; Close(); }
+                else save.Text = "已保存设置";
+            };
             actions.Controls.Add(save); actions.Controls.Add(cancel); layout.Controls.Add(actions, 0, 4); CancelButton = cancel;
+            foreach (CheckBox option in new[] { _enabled, _programs, _countries, _traffic, _upload })
+                option.CheckedChanged += delegate { save.Text = "保存设置"; };
+            foreach (NumericUpDown option in new[] { _threshold, _uploadThreshold, _uploadSeconds })
+                option.ValueChanged += delegate { save.Text = "保存设置"; };
             _enabled.CheckedChanged += delegate { SetOptionsEnabled(); }; _traffic.CheckedChanged += delegate { SetOptionsEnabled(); }; _upload.CheckedChanged += delegate { SetOptionsEnabled(); };
             SetOptionsEnabled();
         }

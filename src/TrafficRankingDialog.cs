@@ -178,6 +178,7 @@ namespace RouteLens
             _timer.Interval = 1000;
             _timer.Tick += delegate { RefreshReport(); };
             Shown += delegate { RefreshReport(); _timer.Start(); };
+            VisibleChanged += delegate { if (Visible && IsHandleCreated && !IsDisposed && !Disposing) RefreshReport(); };
             FormClosed += delegate { _timer.Stop(); };
             RefreshReport();
         }
@@ -212,7 +213,10 @@ namespace RouteLens
             try { report = _provider(); }
             catch { report = new TrafficReport { Status = "暂时无法读取流量数据，请等待下一次采样。" }; }
             report = report ?? new TrafficReport { Status = "等待连接采样。" };
-            RecordTargets(report); _trend.Record(report); RenderReport(report);
+            // Keep the bounded target/trend history across page switches without
+            // rebuilding the hidden table every second.
+            RecordTargets(report); _trend.Record(report);
+            if (Visible) RenderReport(report);
         }
 
         private void RecordTargets(TrafficReport report)

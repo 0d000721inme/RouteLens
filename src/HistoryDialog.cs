@@ -18,7 +18,7 @@ namespace RouteLens
         private readonly TextBox _search;
         private readonly DataGridView _grid;
         private HistoryReport _lastReport;
-        private bool _busy, _closing;
+        private bool _busy, _closing, _shown;
         private int _requestVersion;
 
         public HistoryDialog(HistoryStore store)
@@ -96,7 +96,12 @@ namespace RouteLens
                 _store.Clear(); Changed();
             };
             _timer.Interval = 5000; _timer.Tick += delegate { if (_enabled.Checked) RefreshData(); };
-            Shown += delegate { RefreshData(); _timer.Start(); };
+            Shown += delegate { _shown = true; RefreshData(); _timer.Start(); };
+            VisibleChanged += delegate
+            {
+                if (!_shown || _closing || IsDisposed || Disposing) return;
+                if (Visible) { RefreshData(); _timer.Start(); } else _timer.Stop();
+            };
             FormClosed += delegate { _closing = true; _timer.Stop(); };
         }
         private static Label Label(string text, float size, Color color)

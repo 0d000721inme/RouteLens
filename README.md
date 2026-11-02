@@ -8,11 +8,15 @@ RouteLens is an open-source Windows network monitor for Clash / Mihomo. One moti
 
 ## 下载与运行
 
-需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v7.1.0.zip`，解压后双击 `RouteLens.exe`；也可以下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v7.1.0/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
+v7.2.0 加入“行为调查”原生模块、主窗口分页与过渡动画，并修复四边和四角缩放，支持圆角窗口。实现范围与验证见 [行为调查集成说明](docs/BEHAVIOR-INVESTIGATION.md)、[分页导航](docs/PAGE-NAVIGATION.md) 与 [窗口缩放](docs/WINDOW-CHROME.md)。
+
+需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v7.2.0.zip`，解压后双击 `RouteLens.exe`；也可以下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v7.2.0/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
 
 保持 Clash / Mihomo 运行，RouteLens 会尝试发现本机控制接口。普通权限可以使用连接、地图和流量视图；DNS 被动捕获需要管理员权限，权限不足时会标注检测受限。
 
 ## 功能
+
+- **页内导航**：顶部九个入口直接切换主窗口内容，当前页高亮，切换保留筛选、设置草稿和调查备注。支持 `Ctrl+Tab` / `Ctrl+Shift+Tab` 前后翻页，带约 170 毫秒淡入过渡；遵循 Windows 动画偏好。
 
 - **原始连接**：查看内核提供的程序、域名、目标 IP、国家或地区、代理链和命中规则；也可切换到 Windows 系统连接视图。
 - **实时流量**：查看 Clash 活动连接的程序排行与速度趋势；另可查看各网卡独立的上下行速度。
@@ -23,16 +27,19 @@ RouteLens is an open-source Windows network monitor for Clash / Mihomo. One moti
 - **联网提醒**：可选提醒新程序、新目标地区或 Clash 流量达到设定阈值；默认关闭，仅本次运行有效。
 - **持续上传与目标观察**：可选持续上传提醒，帮助发现达到自设条件的活动；区分最近出现过的目标和观察到上传增量的目标，仅覆盖 Clash 已观察连接。
 - **证据与系统变更**：查看本次采样状态和缺口、手动读取已有系统日志，按有效 Sysmon ProcessGuid 查看同一进程的其他已读取事件；可比较 Run 启动项快照，或手动导入本地 Zeek JSON 连接记录。
+- **行为调查**：按程序组观察持续上传，或将选中连接加入调查。记录采样时间、峰值、计速范围、归因限制及目标观察；支持搜索、复核备注和 JSON 导出。自动观察默认关闭，记录仅保留在本次运行内，导出默认隐藏程序路径、目标地址与备注。
 
 界面截图使用虚构程序、域名与节点：
 
 ![RouteLens 连接概览](docs/images/main.png)
 
-![按程序查看实时流量排行](docs/images/traffic.png)
+![按程序查看实时流量排行](docs/images/pages-traffic.png)
 
 ![世界地图与国家详情](docs/images/map.png)
 
 ![证据与采集状态](docs/images/evidence.png)
+
+![行为调查集成界面（虚构数据）](docs/images/investigation.png)
 
 ## 数据与能力范围
 
@@ -72,6 +79,11 @@ RouteLens is an open-source Windows network monitor for Clash / Mihomo. One moti
 .\tests\RunEvidenceChecks.ps1
 .\tests\RunSystemTimelineChecks.ps1
 .\tests\RunExternalEvidenceChecks.ps1
+.\tests\RunInvestigationChecks.ps1
+.\tests\RunInvestigationUiChecks.ps1
+.\tests\RunPageNavigationChecks.ps1
+.\tests\RunPageTransitionChecks.ps1
+.\tests\RunWindowChromeChecks.ps1
 ```
 
 系统事件、启动项及外部记录检查使用虚构数据；这些检查不代表已经在真实日志、注册表数据或实际外部日志上验证采集。ETW 原型也仅通过合成检查，未在管理员环境中验证真实事件与归因。

@@ -203,6 +203,13 @@ namespace RouteLens
                 Text(row.RemoteAddress) + ":" + row.RemotePort + "\n" + Text(row.Host) + "\n" + ProgramKey(row, out name, out path) + "\n" + row.ProcessId;
         }
 
+        public static string GetProgramKey(ConnectionInfo row)
+        {
+            if (row == null) throw new ArgumentNullException("row");
+            string name, path;
+            return ProgramKey(row, out name, out path);
+        }
+
         private static string ProgramKey(ConnectionInfo row, out string name, out string path)
         {
             path = Text(row.ProcessPath).Trim().Replace('/', '\\');

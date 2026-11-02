@@ -38,7 +38,7 @@ namespace RouteLens
         private readonly ComboBox _countryPicker;
         private readonly Label _connectionCount, _selectionName, _selectionMeta, _missingDomains, _status, _coverage;
         private readonly CountryRankList _programs, _domains;
-        private bool _syncing;
+        private bool _syncing, _shown;
         private string _selectedCode;
 
         public MapExplorerDialog(Func<MapExplorerSnapshot> provider, Action<string> selectCountry)
@@ -145,7 +145,12 @@ namespace RouteLens
             footer.Controls.Add(close, 1, 0); CancelButton = close;
 
             _timer.Interval = 1000; _timer.Tick += delegate { RefreshSnapshot(); };
-            Shown += delegate { FitWorkingArea(); RefreshSnapshot(); _timer.Start(); };
+            Shown += delegate { _shown = true; FitWorkingArea(); RefreshSnapshot(); _timer.Start(); };
+            VisibleChanged += delegate
+            {
+                if (!_shown || IsDisposed || Disposing) return;
+                if (Visible) { RefreshSnapshot(); _timer.Start(); } else _timer.Stop();
+            };
             FormClosed += delegate { _timer.Stop(); };
             RefreshSnapshot();
         }
@@ -168,6 +173,7 @@ namespace RouteLens
 
         private void FitWorkingArea()
         {
+            if (!TopLevel) return;
             Rectangle area = Screen.FromControl(this).WorkingArea;
             if (Width > area.Width || Height > area.Height)
             {

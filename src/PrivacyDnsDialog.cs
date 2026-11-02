@@ -85,6 +85,14 @@ namespace RouteLens
             _status.ForeColor = UiPalette.Accent; _status.Text = text;
         }
 
+        protected override void Dispose(bool disposing)
+        {
+            // Embedded pages are disposed by their parent without FormClosing.
+            // The running async operation owns disposal of its cancellation source.
+            if (disposing && _cancellation != null) _cancellation.Cancel();
+            base.Dispose(disposing);
+        }
+
         public static string FormatReport(PrivacyDnsReport report)
         {
             if (report == null) return "尚未取得结果，无法判断。";

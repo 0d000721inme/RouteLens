@@ -16,6 +16,7 @@ namespace RouteLens
         private readonly CheckBox _includeConnection;
         private readonly Timer _timer = new Timer();
         private EvidenceEvent _lastEvent;
+        private bool _shown;
 
         public EvidenceDialog(EvidenceMonitor monitor, Func<string> selected, Action showSystemTimeline, Action showAdvanced, Action showExternal = null)
         {
@@ -62,7 +63,12 @@ namespace RouteLens
             _includeConnection = new ModernCheck { Text = "包含所选连接", Width = 135, Height = 34, Margin = new Padding(4, 0, 0, 0), AccessibleName = "导出时包含所选连接中的域名、IP 和程序信息" };
             Button close = ActionButton("关闭", 85); close.DialogResult = DialogResult.OK;
             actions.Controls.AddRange(new Control[] { timeline, advanced, external, export, _includeConnection, close }); layout.Controls.Add(actions, 0, 6); CancelButton = close;
-            _timer.Interval = 1000; _timer.Tick += delegate { RefreshData(); }; Shown += delegate { RefreshData(); _timer.Start(); }; FormClosed += delegate { _timer.Stop(); };
+            _timer.Interval = 1000; _timer.Tick += delegate { RefreshData(); }; Shown += delegate { _shown = true; RefreshData(); _timer.Start(); }; FormClosed += delegate { _timer.Stop(); };
+            VisibleChanged += delegate
+            {
+                if (!_shown || IsDisposed || Disposing) return;
+                if (Visible) { RefreshData(); _timer.Start(); } else _timer.Stop();
+            };
         }
         private static Label TextLabel(string text, float size, Color color)
         { return new Label { Text = text, Dock = DockStyle.Fill, Font = UiPalette.Body(size), ForeColor = color, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0), AutoEllipsis = true }; }

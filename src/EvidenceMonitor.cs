@@ -43,6 +43,10 @@ namespace RouteLens
         {
             if (!String.IsNullOrWhiteSpace(message)) Add("联网提醒", "观察触发", message.IndexOf("持续上传", StringComparison.Ordinal) >= 0 ? "持续上传观察已触发；这不代表恶意行为。" : "已有联网提醒触发；请在提醒页面查看设置。");
         }
+        public void RecordInvestigation()
+        {
+            Add("行为调查", "生成调查记录", "程序组持续上传达到观察条件；可在行为调查中复核，不能据此确认攻击或感染。");
+        }
         public void RecordUploadAlert(double bytesPerSecond, double seconds)
         {
             Add("联网提醒", "持续上传观察", "Clash 已计速连接连续达到 " + (bytesPerSecond / 1048576d).ToString("0.##") + " MiB/s，至少 " + seconds.ToString("0.#") + " 秒；不代表恶意行为。");
