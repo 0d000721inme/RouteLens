@@ -8,6 +8,18 @@ namespace RouteLens
 {
     internal static class WindowChrome
     {
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr window, int index);
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] private static extern int SetWindowLong(IntPtr window, int index, int value);
+        [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+
+        internal static void EnableNativeSizing(IntPtr window)
+        {
+            int style = GetWindowLong(window, -16);
+            if ((style & 0x00040000) != 0) return;
+            SetWindowLong(window, -16, style | 0x00040000);
+            SetWindowPos(window, IntPtr.Zero, 0, 0, 0, 0, 0x0037); // FRAMECHANGED, NOMOVE, NOSIZE, NOZORDER, NOACTIVATE.
+        }
+
         // Only the exposed perimeter belongs to the form. Wider corner zones
         // along that perimeter make diagonal resizing easier without eating clicks.
         internal static int HitTest(Point point, Size size, int edge)
@@ -53,6 +65,38 @@ namespace RouteLens
             info.MaxPosition = new Point(area.Left - monitor.Left, area.Top - monitor.Top);
             info.MaxSize = new Point(area.Width, area.Height);
             Marshal.StructureToPtr(info, data, false);
+        }
+    }
+
+    // A visible, larger target inside the rounded corner. Mouse-down hands the
+    // gesture to the owner's native resize loop, which retains capture off-window.
+    internal sealed class WindowResizeGrip : Control
+    {
+        [DllImport("user32.dll")] private static extern bool ReleaseCapture();
+        [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
+        internal WindowResizeGrip()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            BackColor = UiPalette.Canvas; Cursor = Cursors.SizeNWSE; TabStop = false;
+            AccessibleName = "拖动右下角调整窗口大小";
+        }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            Form owner = FindForm();
+            if (e.Button != MouseButtons.Left || owner == null || owner.WindowState != FormWindowState.Normal) return;
+            Point screen = Cursor.Position;
+            ReleaseCapture();
+            SendMessage(owner.Handle, 0xA1, new IntPtr(17), new IntPtr(unchecked((screen.Y << 16) | (screen.X & 0xffff))));
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            float scale = Width / 24f;
+            using (Pen pen = new Pen(UiPalette.Muted, Math.Max(1, scale)))
+                for (int inset = 5; inset <= 13; inset += 4)
+                    e.Graphics.DrawLine(pen, (24 - inset) * scale, 20 * scale, 20 * scale, (24 - inset) * scale);
         }
     }
 }

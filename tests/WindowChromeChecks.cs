@@ -19,6 +19,7 @@ internal static class WindowChromeChecks
     private static readonly string[] Labels = { "连接", "实时流量", "历史流量", "世界地图", "隐私检测", "离线地区", "提醒", "证据", "行为调查" };
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(Point point);
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr window, int index);
     private static void Check(bool condition, string message) { checks++; if (!condition) throw new Exception(message); }
     private static T Field<T>(object owner, string name) { return (T)owner.GetType().GetField(name, Private).GetValue(owner); }
     private static IEnumerable<Control> Children(Control parent) { return parent.Controls.Cast<Control>().SelectMany(c => new[] { c }.Concat(Children(c))); }
@@ -56,10 +57,17 @@ internal static class WindowChromeChecks
             Check(Hit(main, target.Key) == target.Value, context + ": wrong resize direction at " + target.Key);
             // Sending directly to the parent alone would miss the original bug:
             // a docked child HWND covered the perimeter and received the real mouse.
-            Check(WindowFromPoint(main.PointToScreen(target.Key)) == main.Handle,
+            IntPtr actual = WindowFromPoint(main.PointToScreen(target.Key));
+            Control grip = main.Controls.Cast<Control>().First(c => c is WindowResizeGrip);
+            Check(actual == main.Handle || (target.Value == 17 && actual == grip.Handle),
                 context + ": a child or another window covers resize target " + target.Key);
         }
         Point content = new Point(main.ClientSize.Width / 2, main.ClientSize.Height / 2);
+        Check((GetWindowLong(main.Handle, -16) & 0x00040000) != 0, context + ": native resize style was lost");
+        Control handle = main.Controls.Cast<Control>().First(c => c is WindowResizeGrip);
+        Check(handle.Visible && handle.Cursor == Cursors.SizeNWSE, context + ": resize grip is unavailable");
+        Check(handle.Right == main.ClientSize.Width - 2 && handle.Bottom == main.ClientSize.Height - 2, context + ": resize grip did not follow client bounds");
+        Check(WindowFromPoint(handle.PointToScreen(new Point(handle.Width / 2, handle.Height / 2))) == handle.Handle, context + ": resize grip is covered by page content");
         Check(Hit(main, content) == 1, context + ": content was treated as a resize grip");
         Check(WindowFromPoint(main.PointToScreen(content)) != main.Handle, context + ": child content was unexpectedly removed");
     }
@@ -137,6 +145,8 @@ internal static class WindowChromeChecks
                     Check(main.Bounds == new Rectangle(80, 80, 1180, 780), "First display changed the requested window bounds: " + main.Bounds);
                     Check(main.Padding.Left >= 8 && main.Padding.All == main.Padding.Left, "No exposed perimeter for resize messages");
                     Check(main.ClientSize == main.Size, "Custom frame unexpectedly reduced the client area");
+                    main.Enabled = false; main.Enabled = true; Pump(40);
+                    Check((GetWindowLong(main.Handle, -16) & 0x00040000) != 0, "Updating window styles removed native sizing");
                     CheckCorners(main);
                     foreach (string label in Labels)
                     {

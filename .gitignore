@@ -24,6 +24,7 @@ tests/.build/
 !release/RouteLens-Windows-v7.zip
 !release/RouteLens-Windows-v7.1.0.zip
 !release/RouteLens-Windows-v7.2.0.zip
+!release/RouteLens-Windows-v7.2.1.zip
 
 # Local delivery history and scratch workspace
 /outputs/

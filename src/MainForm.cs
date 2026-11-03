@@ -60,6 +60,7 @@ namespace RouteLens
         private ConnectionGrid _grid;
         private float _dpiScale = 1f;
         private bool _updatingChrome;
+        private WindowResizeGrip _resizeGrip;
 
         [DllImport("user32.dll")] private static extern bool ReleaseCapture();
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
@@ -120,6 +121,7 @@ namespace RouteLens
             _pageTransition = new PageTransition { Dock = DockStyle.Fill };
             _pageHost.Controls.Add(_pageTransition);
             shell.Controls.Add(_pageHost, 0, 1); Controls.Add(shell);
+            _resizeGrip = new WindowResizeGrip(); Controls.Add(_resizeGrip);
 
             TableLayoutPanel intro = Table(2);
             intro.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); intro.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 296));
@@ -814,6 +816,8 @@ namespace RouteLens
                 RenderConnections();
             }); });
         }
+        // WinForms calculates client/restore sizes from these borderless styles.
+        // The HWND receives WS_THICKFRAME separately, with a custom client frame.
         protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.Style |= 0x00080000 | 0x00020000 | 0x00010000; return p; } }
         protected override void OnHandleCreated(EventArgs e)
         {
@@ -825,6 +829,14 @@ namespace RouteLens
         {
             base.OnResize(e); UpdateWindowChrome();
         }
+        protected override void OnClientSizeChanged(EventArgs e)
+        {
+            base.OnClientSizeChanged(e); UpdateWindowChrome();
+        }
+        protected override void OnStyleChanged(EventArgs e)
+        {
+            base.OnStyleChanged(e); UpdateWindowChrome();
+        }
         private void UpdateWindowChrome()
         {
             if (!IsHandleCreated || _updatingChrome || IsDisposed) return;
@@ -832,9 +844,17 @@ namespace RouteLens
             try
             {
                 // Docked pages must not cover the form's resize hit targets.
-                int edge = WindowState == FormWindowState.Normal ? Math.Max(6, (int)Math.Ceiling(8 * _dpiScale)) : 0;
+                WindowChrome.EnableNativeSizing(Handle);
+                int edge = WindowState == FormWindowState.Normal ? Math.Max(8, (int)Math.Ceiling(8 * _dpiScale)) : 0;
                 Padding padding = new Padding(edge);
                 if (Padding != padding) Padding = padding;
+                if (_resizeGrip != null)
+                {
+                    int grip = (int)Math.Ceiling(24 * _dpiScale);
+                    _resizeGrip.SetBounds(ClientSize.Width - grip - 2, ClientSize.Height - grip - 2, grip, grip);
+                    _resizeGrip.Visible = WindowState == FormWindowState.Normal;
+                    _resizeGrip.BringToFront();
+                }
                 WindowChrome.ApplyCorners(this, _dpiScale);
             }
             finally { _updatingChrome = false; }
@@ -867,11 +887,12 @@ namespace RouteLens
             if (WindowState != FormWindowState.Normal || Width < 2 || Height < 2) return;
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             using (Pen pen = new Pen(UiPalette.Border))
-            using (System.Drawing.Drawing2D.GraphicsPath path = UiPaint.RoundedPath(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), (Region == null ? 8 : 12) * _dpiScale))
+            using (System.Drawing.Drawing2D.GraphicsPath path = UiPaint.RoundedPath(new RectangleF(0.5f, 0.5f, ClientSize.Width - 1, ClientSize.Height - 1), 12 * _dpiScale))
                 e.Graphics.DrawPath(pen, path);
         }
         protected override void WndProc(ref Message m)
         {
+            if (m.Msg == 0x83) { m.Result = IntPtr.Zero; return; } // WM_NCCALCSIZE: custom frame fills the HWND.
             if (m.Msg == 0x84 && WindowState == FormWindowState.Normal)
             {
                 base.WndProc(ref m); long packed = m.LParam.ToInt64();

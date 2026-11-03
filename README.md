@@ -8,9 +8,9 @@ RouteLens is an open-source Windows network monitor for Clash / Mihomo. One moti
 
 ## 下载与运行
 
-v7.2.0 加入“行为调查”原生模块、主窗口分页与过渡动画，并修复四边和四角缩放，支持圆角窗口。实现范围与验证见 [行为调查集成说明](docs/BEHAVIOR-INVESTIGATION.md)、[分页导航](docs/PAGE-NAVIGATION.md) 与 [窗口缩放](docs/WINDOW-CHROME.md)。
+v7.2.1 修复右下角实际拖拽无法缩放的问题，启用 Windows 原生缩放并增加可见拖拽柄。保留 v7.2.0 的行为调查、主窗口分页、过渡动画和圆角。实现范围与验证见 [行为调查集成说明](docs/BEHAVIOR-INVESTIGATION.md)、[分页导航](docs/PAGE-NAVIGATION.md) 与 [窗口缩放](docs/WINDOW-CHROME.md)。
 
-需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v7.2.0.zip`，解压后双击 `RouteLens.exe`；也可以下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v7.2.0/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
+需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v7.2.1.zip`，解压后双击 `RouteLens.exe`；也可以下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v7.2.1/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
 
 保持 Clash / Mihomo 运行，RouteLens 会尝试发现本机控制接口。普通权限可以使用连接、地图和流量视图；DNS 被动捕获需要管理员权限，权限不足时会标注检测受限。
 
