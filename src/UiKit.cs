@@ -141,9 +141,9 @@ namespace RouteLens
             Padding = new Padding(16);
         }
 
-        public int Radius { get { return radius; } set { radius = Math.Max(0, value); Invalidate(); } }
-        public Color SurfaceColor { get { return surface; } set { surface = value; Invalidate(); } }
-        public Color BorderColor { get { return border; } set { border = value; Invalidate(); } }
+        public int Radius { get { return radius; } set { int next = Math.Max(0, value); if (radius == next) return; radius = next; Invalidate(); } }
+        public Color SurfaceColor { get { return surface; } set { if (surface == value) return; surface = value; Invalidate(); } }
+        public Color BorderColor { get { return border; } set { if (border == value) return; border = value; Invalidate(); } }
 
         protected override void OnPaintBackground(PaintEventArgs e)
         {
@@ -178,10 +178,10 @@ namespace RouteLens
             AccessibleRole = AccessibleRole.PushButton;
         }
 
-        public string IconName { get { return iconName; } set { iconName = value; Invalidate(); } }
-        public bool Primary { get { return primary; } set { primary = value; Invalidate(); } }
-        public bool Quiet { get { return quiet; } set { quiet = value; Invalidate(); } }
-        public int CornerRadius { get { return cornerRadius; } set { cornerRadius = Math.Max(0, value); Invalidate(); } }
+        public string IconName { get { return iconName; } set { if (iconName == value) return; iconName = value; Invalidate(); } }
+        public bool Primary { get { return primary; } set { if (primary == value) return; primary = value; Invalidate(); } }
+        public bool Quiet { get { return quiet; } set { if (quiet == value) return; quiet = value; Invalidate(); } }
+        public int CornerRadius { get { return cornerRadius; } set { int next = Math.Max(0, value); if (cornerRadius == next) return; cornerRadius = next; Invalidate(); } }
 
         protected override void OnPaint(PaintEventArgs e)
         {

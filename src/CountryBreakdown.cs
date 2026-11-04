@@ -17,6 +17,7 @@ namespace RouteLens
     {
         private readonly List<CountryStat> _countries = new List<CountryStat>();
         private readonly Rectangle[] _rowBounds = new Rectangle[3];
+        private readonly Image[] _rowFlags = new Image[3];
         private readonly Font _bodyFont = UiPalette.Body(9.3f);
         private readonly Font _footerFont = UiPalette.Body(8.4f);
         private readonly Font _numberFont = UiPalette.Mono(10f);
@@ -103,7 +104,15 @@ namespace RouteLens
                 _tips.SetToolTip(this, "");
             }
             AccessibleDescription = FooterText() + "。" + UnknownText() + "。使用上下方向键选择国家，按回车筛选。";
-            Invalidate();
+            // Unchanged samples need no paint, but a flag can finish loading
+            // between samples. Keep that independent visual change observable.
+            bool flagsChanged = false;
+            for (int i = 0; i < _rowFlags.Length; i++)
+            {
+                Image flag = i < _countries.Count ? Flags.Get(_countries[i].Code) : null;
+                if (!Object.ReferenceEquals(flag, _rowFlags[i])) { _rowFlags[i] = flag; flagsChanged = true; }
+            }
+            if (!unchanged || flagsChanged) Invalidate();
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -161,7 +170,7 @@ namespace RouteLens
             int flagWidth = Scale(22, scale);
             int flagHeight = Scale(15, scale);
             Rectangle flagRect = new Rectangle(inset, row.Y + (row.Height - flagHeight) / 2, flagWidth, flagHeight);
-            Image flag = Flags.Get(country.Code);
+            Image flag = _rowFlags[index];
             if (flag != null)
             {
                 graphics.DrawImage(flag, flagRect);

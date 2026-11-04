@@ -61,6 +61,11 @@ namespace RouteLens
         private float _dpiScale = 1f;
         private bool _updatingChrome;
         private WindowResizeGrip _resizeGrip;
+        private WindowDragSurface _dragSurface;
+        private Size _chromeSize;
+        private FormWindowState _chromeState;
+        private float _chromeScale;
+        private bool _movingOrSizing;
 
         [DllImport("user32.dll")] private static extern bool ReleaseCapture();
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
@@ -79,6 +84,7 @@ namespace RouteLens
             FormBorderStyle = FormBorderStyle.None; ClientSize = new Size(1380, 900); MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen; DoubleBuffered = true; KeyPreview = true;
             BuildInterface();
+            _dragSurface = new WindowDragSurface(this);
             _sampleTimer.Interval = 1000; _sampleTimer.Tick += async delegate { await SampleAsync(); };
             _viewTimer.Interval = 1000; _viewTimer.Tick += delegate { _evidence.CheckStale(); if (_evidence.State == "采样延迟") _investigation.Interrupt("超过 5 秒没有新快照；连续观察已中断。"); UpdateHistoryEvidence(); RenderView(); };
             Shown += async delegate
@@ -224,7 +230,7 @@ namespace RouteLens
         private Control BuildTitleBar()
         {
             TableLayoutPanel bar = Table(3); bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
-            Panel brand = new Panel { Dock = DockStyle.Fill };
+            Panel brand = new Panel { Dock = DockStyle.Fill, Name = "windowBrand" };
             BrandMark mark = new BrandMark { Bounds = new Rectangle(0, 13, 31, 31) };
             Label name = LabelAt("RouteLens", 13, FontStyle.Bold, UiPalette.Ink); name.Font = UiPalette.Heading(13); name.SetBounds(42, 15, 108, 29);
             Label descriptor = LabelAt("网络观察", 9, FontStyle.Regular, UiPalette.Muted); descriptor.SetBounds(156, 19, 64, 23);
@@ -378,7 +384,9 @@ namespace RouteLens
                 if (Math.Abs(_rootLayout.RowStyles[2].Height - pixels) > 0.1f) _rootLayout.RowStyles[2].Height = pixels;
             }
             float logicalWidth = ClientSize.Width / _dpiScale; bool show = _inspectorRequested && logicalWidth >= 1280;
-            _workspace.ColumnStyles[1].Width = show ? 294 * _dpiScale : 0; _inspector.Visible = show; _detailsButton.Enabled = true;
+            float inspectorWidth = show ? 294 * _dpiScale : 0;
+            if (Math.Abs(_workspace.ColumnStyles[1].Width - inspectorWidth) > 0.1f) _workspace.ColumnStyles[1].Width = inspectorWidth;
+            _inspector.Visible = show; _detailsButton.Enabled = true;
             _tips.SetToolTip(_detailsButton, logicalWidth < 1280 ? "打开所选连接的完整信息，双击列表行也可查看。" : "展开或收起所选连接详情；双击列表行可打开完整信息。");
         }
         private static TableLayoutPanel Table(int columns) { TableLayoutPanel table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = columns, RowCount = 1, Margin = new Padding(0), Padding = new Padding(0), BackColor = Color.Transparent }; table.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); return table; }
@@ -452,7 +460,7 @@ namespace RouteLens
         private void SelectCountry(string code) { _countryCode = String.IsNullOrEmpty(code) || String.Equals(_countryCode, code, StringComparison.OrdinalIgnoreCase) ? null : code; RenderConnections(); }
         private void RenderView()
         {
-            if (_closing) return; RenderEgress(); RenderConnections(); RenderDnsStatus(_dns.GetStatus()); _status.ForeColor = UiPalette.Muted;
+            if (_closing || _movingOrSizing) return; RenderEgress(); RenderConnections(); RenderDnsStatus(_dns.GetStatus()); _status.ForeColor = UiPalette.Muted;
             if (_snapshot != null && !String.IsNullOrEmpty(_snapshot.Error)) { _status.Text = "连接读取提示：" + _snapshot.Error; _status.ForeColor = UiPalette.Warn; }
             else if (_snapshot != null && UseClash && !_snapshot.ClashConnected) { _status.Text = _snapshot.SourceStatus ?? "尚未连接 Clash 控制器"; _status.ForeColor = UiPalette.Warn; }
             else _status.Text = (_paused ? "采样已暂停" : (UseClash ? "每1秒采样" : "每2秒采样")) + (_snapshot == null ? "  /  正在读取" + (UseClash ? " Clash 原始连接" : " Windows 系统连接") : "  /  " + _snapshot.SourceStatus) + (_geo.PendingCount > 0 ? "  /  " + _geo.PendingCount + " 个 IP 待识别" : "");
@@ -607,10 +615,13 @@ namespace RouteLens
                 foreach (RowData item in visible)
                 {
                     DataGridViewRow row; if (!_rows.TryGetValue(item.Id, out row)) { int index = _grid.Rows.Add(); row = _grid.Rows[index]; row.Tag = item.Id; _rows.Add(item.Id, row); added = true; }
+                    RowData previous;
+                    bool flagChanged = !_rowData.TryGetValue(item.Id, out previous) || !Object.ReferenceEquals(previous.Flag, item.Flag);
                     _rowData[item.Id] = item; ConnectionInfo c = item.Connection;
                     Set(row, "process", item.Process); Set(row, "pid", c.ProcessId > 0 ? c.ProcessId.ToString() : "—"); Set(row, "host", String.IsNullOrWhiteSpace(c.Host) ? "—" : c.Host); Set(row, "ip", HasRemoteAddress(c) ? c.RemoteAddress : "—");
                     int shownPort = HasRemoteAddress(c) ? c.RemotePort : (c.Protocol == "UDP" ? c.LocalPort : c.RemotePort); Set(row, "port", shownPort > 0 ? shownPort.ToString() : "—");
                     Set(row, "flag", item.Flag); Set(row, "country", item.Country); Set(row, "org", item.Organization); Set(row, "route", RouteLabel(c)); Set(row, "chain", String.IsNullOrWhiteSpace(c.ProxyChain) ? "—" : c.ProxyChain); Set(row, "protocol", c.Protocol); Set(row, "state", ConnectionState(c));
+                    if (flagChanged) _grid.InvalidateCell(row.Cells["country"]);
                     row.Cells["ip"].ToolTipText = "本地 " + Endpoint(c.LocalAddress, c.LocalPort) + "  →  " + (String.IsNullOrEmpty(c.RemoteAddress) ? "远端未知" : Endpoint(c.RemoteAddress, c.RemotePort));
                     row.Cells["port"].ToolTipText = c.Protocol == "UDP" && !HasRemoteAddress(c) ? "Windows UDP 为本地端口，没有远端信息" : "目标端口 " + c.RemotePort;
                     row.Cells["country"].ToolTipText = item.Geo != null && !String.IsNullOrEmpty(item.Geo.Error) ? item.Geo.Error : item.Country + (item.Geo == null || String.IsNullOrEmpty(item.Geo.City) ? "" : " / " + item.Geo.City);
@@ -620,7 +631,7 @@ namespace RouteLens
                 }
                 if (added && _grid.SortedColumn != null) _grid.Sort(_grid.SortedColumn, _grid.SortOrder == SortOrder.Descending ? System.ComponentModel.ListSortDirection.Descending : System.ComponentModel.ListSortDirection.Ascending);
                 if (selectedId != null && _rows.ContainsKey(selectedId)) { DataGridViewColumn target = _grid.CurrentCell != null && _grid.CurrentCell.Visible ? _grid.CurrentCell.OwningColumn : _grid.Columns["process"]; _grid.CurrentCell = _rows[selectedId].Cells[target.Index]; _rows[selectedId].Selected = true; }
-                if (topId != null && _rows.ContainsKey(topId)) _grid.FirstDisplayedScrollingRowIndex = _rows[topId].Index;
+                if (topId != null && _rows.ContainsKey(topId) && _grid.FirstDisplayedScrollingRowIndex != _rows[topId].Index) _grid.FirstDisplayedScrollingRowIndex = _rows[topId].Index;
             }
             finally { _updatingRows = false; _grid.ResumeLayout(); }
             _metricConnections.Text = visible.Count.ToString(); _metricProcesses.Text = processes.Count.ToString(); _metricCountries.Text = countries.Count.ToString();
@@ -633,7 +644,7 @@ namespace RouteLens
                 else if (all.Count > 0) _empty.Text = "当前筛选下暂无连接\n可取消“仅公网目标”或开启 UDP 连接";
                 else _empty.Text = UseClash ? "Clash 当前没有可见连接\n打开网站或应用后查看程序、域名与实际代理链" : "Windows 当前没有可见连接";
             }
-            _grid.InvalidateColumn(_grid.Columns["country"].Index); RenderInspector();
+            RenderInspector();
         }
 
         private void RenderInspector()
@@ -822,8 +833,20 @@ namespace RouteLens
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
+            _chromeSize = Size.Empty;
             using (Graphics graphics = CreateGraphics()) _dpiScale = graphics.DpiX / 96f;
             UpdateWindowChrome();
+        }
+        protected override void OnResizeBegin(EventArgs e)
+        {
+            _movingOrSizing = true;
+            base.OnResizeBegin(e);
+        }
+        protected override void OnResizeEnd(EventArgs e)
+        {
+            base.OnResizeEnd(e);
+            _movingOrSizing = false;
+            if (_grid != null) RenderView();
         }
         protected override void OnResize(EventArgs e)
         {
@@ -845,6 +868,7 @@ namespace RouteLens
             {
                 // Docked pages must not cover the form's resize hit targets.
                 WindowChrome.EnableNativeSizing(Handle);
+                if (_chromeSize == Size && _chromeState == WindowState && _chromeScale == _dpiScale) return;
                 int edge = WindowState == FormWindowState.Normal ? Math.Max(8, (int)Math.Ceiling(8 * _dpiScale)) : 0;
                 Padding padding = new Padding(edge);
                 if (Padding != padding) Padding = padding;
@@ -856,6 +880,7 @@ namespace RouteLens
                     _resizeGrip.BringToFront();
                 }
                 WindowChrome.ApplyCorners(this, _dpiScale);
+                _chromeSize = Size; _chromeState = WindowState; _chromeScale = _dpiScale;
             }
             finally { _updatingChrome = false; }
             Invalidate();
@@ -913,6 +938,7 @@ namespace RouteLens
             if (e.CloseReason == CloseReason.UserClosing && _pages.TryGetValue("investigation", out page) &&
                 !((InvestigationDialog)page).ConfirmDiscardDrafts()) { e.Cancel = true; return; }
             _closing = true; _sourceGeneration++; _sampleTimer.Stop(); _viewTimer.Stop();
+            _dragSurface.Dispose();
             _pageTransition.Stop(); foreach (Form cached in _pages.Values) cached.Dispose(); _pages.Clear();
             _sampleTimer.Dispose(); _viewTimer.Dispose(); _tips.Dispose();
             if (_dnsNotification != null) _dnsNotification.Dispose(); if (_activityNotification != null) _activityNotification.Dispose();

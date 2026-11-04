@@ -30,7 +30,7 @@ internal static class WindowResizeInteractionChecks
         private bool updating;
         private readonly Timer debugTimer = new Timer();
         [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr window, int index);
-        private int nonClientDown, lastHit, sizeCommands, enters, exits, sizing, changes;
+        private int nonClientDown, lastHit, sizeCommands, moveCommands, enters, exits, sizing, changes;
 
         internal ResizeObserver(MainForm target)
         {
@@ -47,7 +47,7 @@ internal static class WindowResizeInteractionChecks
 
         internal void Reset()
         {
-            nonClientDown = lastHit = sizeCommands = enters = exits = sizing = changes = 0;
+            nonClientDown = lastHit = sizeCommands = moveCommands = enters = exits = sizing = changes = 0;
             UpdateTitle();
         }
 
@@ -58,11 +58,17 @@ internal static class WindowResizeInteractionChecks
             try
             {
                 string status = form.Width + "x" + form.Height + " @" + form.Left + "," + form.Top + " " + form.WindowState +
-                    " | Down=" + nonClientDown + "/HT" + lastHit + " Size=" + sizeCommands + " Enter=" + enters +
+                    " | Down=" + nonClientDown + "/HT" + lastHit + " Size=" + sizeCommands + " Move=" + moveCommands + " Enter=" + enters +
                     " Exit=" + exits + " Sizing=" + sizing + " Changes=" + changes;
                 Control grip = form.Controls.Cast<Control>().FirstOrDefault(c => c is WindowResizeGrip);
                 if (grip != null) status += " Grip=" + grip.Bounds + " Client=" + form.ClientSize;
                 status += " Cursor=" + form.PointToClient(Cursor.Position) + " Style=" + GetWindowLong(form.Handle, -16).ToString("X");
+                Point dragPoint = new Point(18, 200), dragScreen = form.PointToScreen(dragPoint);
+                Control dragTarget = form;
+                for (Control child = dragTarget.GetChildAtPoint(dragTarget.PointToClient(dragScreen), GetChildAtPointSkip.Invisible); child != null;
+                    child = dragTarget.GetChildAtPoint(dragTarget.PointToClient(dragScreen), GetChildAtPointSkip.Invisible)) dragTarget = child;
+                WindowDragSurface drag = Field<WindowDragSurface>(form, "_dragSurface");
+                status += " Blank=" + dragPoint + "/" + dragTarget.GetType().Name + "/CanDrag=" + drag.CanDrag(dragTarget, dragTarget.PointToClient(dragScreen));
                 form.Text = "RouteLens · 拖拽验证 | " + status;
                 Field<Label>(form, "_status").Text = "仅虚构数据 · " + status;
             }
@@ -77,6 +83,7 @@ internal static class WindowResizeInteractionChecks
                 case 0xA1: nonClientDown++; lastHit = message.WParam.ToInt32(); break; // WM_NCLBUTTONDOWN
                 case 0x112:
                     if ((message.WParam.ToInt64() & 0xfff0) == 0xf000) sizeCommands++;
+                    else if ((message.WParam.ToInt64() & 0xfff0) == 0xf010) moveCommands++;
                     else changed = false;
                     break;
                 case 0x231: enters++; break; // WM_ENTERSIZEMOVE
