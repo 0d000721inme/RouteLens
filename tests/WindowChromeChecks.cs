@@ -20,6 +20,7 @@ internal static class WindowChromeChecks
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(Point point);
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int max);
     private static void Check(bool condition, string message) { checks++; if (!condition) throw new Exception(message); }
     private static T Field<T>(object owner, string name) { return (T)owner.GetType().GetField(name, Private).GetValue(owner); }
     private static IEnumerable<Control> Children(Control parent) { return parent.Controls.Cast<Control>().SelectMany(c => new[] { c }.Concat(Children(c))); }
@@ -60,7 +61,10 @@ internal static class WindowChromeChecks
             IntPtr actual = WindowFromPoint(main.PointToScreen(target.Key));
             Control grip = main.Controls.Cast<Control>().First(c => c is WindowResizeGrip);
             Check(actual == main.Handle || (target.Value == 17 && actual == grip.Handle),
-                context + ": a child or another window covers resize target " + target.Key);
+                context + ": a child or another window covers resize target " + target.Key +
+                "; hwnd=" + actual.ToInt64().ToString("X") + "/" + WindowClass(actual) + " main=" + main.Handle.ToInt64().ToString("X") + "; controls=" + String.Join(", ", Children(main)
+                    .Where(c => c.IsHandleCreated && c.Handle == actual).Select(c => c.GetType().Name + " " + c.Name + " " + c.Bounds).ToArray()) +
+                "; form-client=" + main.ClientSize + "; padding=" + main.Padding + "; shell=" + Field<Control>(main, "_rootLayout").Bounds);
         }
         Point content = new Point(main.ClientSize.Width / 2, main.ClientSize.Height / 2);
         Check((GetWindowLong(main.Handle, -16) & 0x00040000) != 0, context + ": native resize style was lost");
@@ -70,6 +74,12 @@ internal static class WindowChromeChecks
         Check(WindowFromPoint(handle.PointToScreen(new Point(handle.Width / 2, handle.Height / 2))) == handle.Handle, context + ": resize grip is covered by page content");
         Check(Hit(main, content) == 1, context + ": content was treated as a resize grip");
         Check(WindowFromPoint(main.PointToScreen(content)) != main.Handle, context + ": child content was unexpectedly removed");
+    }
+    private static string WindowClass(IntPtr handle)
+    {
+        var name = new System.Text.StringBuilder(256);
+        GetClassName(handle, name, name.Capacity);
+        return name.ToString();
     }
     private static void CheckGeometry()
     {
@@ -141,7 +151,7 @@ internal static class WindowChromeChecks
                         main.Resize += delegate { ShowBounds(main); }; main.LocationChanged += delegate { ShowBounds(main); };
                         Application.Run(main); return 0;
                     }
-                    CheckGeometry(); main.Show(); Pump(80); SyntheticSnapshot(main);
+                    CheckGeometry(); main.Show(); main.TopMost = true; main.Activate(); Pump(80); SyntheticSnapshot(main);
                     Check(main.Bounds == new Rectangle(80, 80, 1180, 780), "First display changed the requested window bounds: " + main.Bounds);
                     Check(main.Padding.Left >= 8 && main.Padding.All == main.Padding.Left, "No exposed perimeter for resize messages");
                     Check(main.ClientSize == main.Size, "Custom frame unexpectedly reduced the client area");

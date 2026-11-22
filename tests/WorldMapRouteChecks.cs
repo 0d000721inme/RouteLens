@@ -27,6 +27,16 @@ internal static class WorldMapRouteChecks
                 host.Controls.Add(map);
                 host.Show();
                 Application.DoEvents();
+                Button demoButton = Field<Button>(map, "_trafficDemoButton");
+                Check(demoButton.Visible && demoButton.AccessibleName.Contains("示例"), "A visible, named animation button must be available on the distribution map.");
+                demoButton.PerformClick();
+                Check(Field<bool>(map, "_routeDemo") && Field<bool>(map, "_routeMode") &&
+                    Field<bool>(map, "_routeUploading") && Field<bool>(map, "_routeDownloading"),
+                    "Clicking the distribution-map button must start the explicitly marked two-way demo.");
+                Check(Field<WorldMapRoutePoint>(map, "_routeSource").Label.Contains("演示") &&
+                    Field<WorldMapRoutePoint>(map, "_routeDestination").Label.Contains("演示"),
+                    "Demo endpoints must never look like observed real connection endpoints.");
+                map.ClearRoute();
                 map.ZoomIn();
                 float originalZoom = map.ZoomFactor;
                 map.SetRoute(null, null);
@@ -101,9 +111,29 @@ internal static class WorldMapRouteChecks
             main.SetSnapshotForTest(snapshot); Application.DoEvents();
             var grid = Field<DataGridView>(main, "_grid");
             Check(grid.Rows.Count == 1, "Selected connection available in actual grid");
+            typeof(MainForm).GetMethod("ShowMapExplorer", Private).Invoke(main, null); Application.DoEvents();
+            MapExplorerDialog page = (MapExplorerDialog)Field<Dictionary<string, Form>>(main, "_pages")["map"];
+            WorldMapControl distributionMap = Field<WorldMapControl>(page, "_map");
+            ModernButton visibleDemo = Field<ModernButton>(page, "_playDemo");
+            Check(visibleDemo.Visible && visibleDemo.AccessibleName.Contains("示例"),
+                "The distribution page must expose its demo animation beside the map zoom controls.");
+            Check(Field<bool>(distributionMap, "_routeDemo") &&
+                Field<WorldMapRoutePoint>(distributionMap, "_routeSource").Label.Contains("演示") &&
+                Field<WorldMapRoutePoint>(distributionMap, "_routeDestination").Label.Contains("演示"),
+                "Navigating to the distribution map automatically shows a clearly marked demo route.");
+            visibleDemo.PerformClick(); Application.DoEvents();
+            Check(Field<bool>(distributionMap, "_routeDemo") && Field<Timer>(distributionMap, "_routeTimer").Enabled,
+                "The visible demo button must play moving two-way direction markers.");
+            System.Windows.Forms.Timer entryDemoTimer = Field<System.Windows.Forms.Timer>(distributionMap, "_demoTimer");
+            entryDemoTimer.Interval = 500;
+            PumpFor(300);
+            typeof(MapExplorerDialog).GetMethod("RefreshSnapshot", Private).Invoke(page, null);
+            page.ShowDistribution();
+            PumpFor(300);
+            Check(!Field<bool>(distributionMap, "_routeDemo") && !entryDemoTimer.Enabled,
+                "Ordinary refresh and repeated distribution selection must not restart the entry demo.");
             grid.CurrentCell = grid.Rows[0].Cells["process"];
             typeof(MainForm).GetMethod("ShowSelectedPath", Private).Invoke(main, null); Application.DoEvents();
-            MapExplorerDialog page = (MapExplorerDialog)Field<Dictionary<string, Form>>(main, "_pages")["map"];
             ConnectionPathView view = Field<ConnectionPathView>(page, "_pathView");
             Button measure = Field<ModernButton>(view, "measure"); ListView hops = Field<ListView>(view, "hops");
             Check(view.Visible && measure.Enabled && measure.AccessibleDescription.Contains("127.0.0.1"), "Uses reported proxy endpoint");
@@ -114,16 +144,57 @@ internal static class WorldMapRouteChecks
             Application.DoEvents();
             Check(hops.Items.Count == 1 && hops.Items[0].SubItems[1].Text == "127.0.0.1" && Field<Label>(view, "status").Text.Contains("已到达"),
                 "Real loopback via pinned UI: rows=" + hops.Items.Count + ", status=" + Field<Label>(view, "status").Text + ", selectable=" + measure.CanSelect);
+            Field<Button>(view, "demo").PerformClick(); Application.DoEvents();
+            WorldMapControl pathMap = Field<WorldMapControl>(view, "map");
+            Check(Field<bool>(view, "demoPlaying") && Field<bool>(pathMap, "_routeDemo") &&
+                Field<Label>(view, "status").Text.Contains("非实时"), "Pinned-path demo must be visible and labeled as sample traffic.");
+            ConnectionInfo measuredRow = new ConnectionInfo { Id = "measured", Host = "measured.example", ProcessName = "fixture.exe",
+                Protocol = "TCP", Scope = "公网", RemoteAddress = "8.8.8.8", RemotePort = 443, RouteType = "代理",
+                OutboundAddress = "1.1.1.1", ProxyChain = "Fixture node", DataSource = "Clash / Mihomo", HasTrafficCounters = true };
+            NetworkSnapshot measuredSnapshot = new NetworkSnapshot { ClashConnected = true, CapturedAt = DateTime.Now,
+                SourceName = "measured", Connections = new List<ConnectionInfo> { measuredRow } };
+            TrafficReport measuredTraffic = new TrafficReport { Measuring = true, UploadPerSecond = 512 };
+            using (Form measuredHost = new Form { ClientSize = new Size(900, 600), ShowInTaskbar = false,
+                StartPosition = FormStartPosition.Manual, Location = new Point(-2400, -2000) })
+            using (ConnectionPathView measuredView = new ConnectionPathView(delegate { return measuredSnapshot; }, delegate { return measuredTraffic; },
+                delegate { return new GeoResult { Status = "ok", CountryCode = "HK", CountryName = "中国香港" }; }, delegate { return false; }, delegate { }))
+            {
+                measuredHost.Controls.Add(measuredView); measuredHost.Show(); Application.DoEvents();
+                measuredView.Pin(measuredRow, measuredSnapshot); Field<ComboBox>(measuredView, "origin").SelectedIndex = 1;
+                WorldMapControl measuredMap = Field<WorldMapControl>(measuredView, "map");
+                Check(Field<bool>(measuredMap, "_routeUploading") && !Field<bool>(measuredMap, "_routeDownloading"),
+                    "A positive measured upload animates only the upload direction.");
+                measuredTraffic.UploadPerSecond = 0; measuredTraffic.DownloadPerSecond = 1024; measuredView.UpdateView();
+                Check(!Field<bool>(measuredMap, "_routeUploading") && Field<bool>(measuredMap, "_routeDownloading"),
+                    "A positive measured download animates only the download direction.");
+                measuredTraffic.Measuring = false; measuredView.UpdateView();
+                Check(!Field<bool>(measuredMap, "_routeUploading") && !Field<bool>(measuredMap, "_routeDownloading"),
+                    "Unmeasured rates never animate an observed connection.");
+                measuredHost.Close(); Application.DoEvents();
+            }
             typeof(MainForm).GetField("_paused", Private).SetValue(main, true);
             typeof(MainForm).GetMethod("RenderConnections", Private).Invoke(main, null);
-            Check(!measure.Enabled && Field<Label>(view, "status").Text.Contains("暂停"), "Pause stops active path observation");
+            Check(!measure.Enabled && !Field<bool>(view, "demoPlaying") && !Field<bool>(pathMap, "_routeDemo") &&
+                !Field<bool>(pathMap, "_routeUploading") && !Field<bool>(pathMap, "_routeDownloading") &&
+                Field<Label>(view, "status").Text.Contains("暂停"), "Pause stops active path and demo animations");
             typeof(MainForm).GetField("_paused", Private).SetValue(main, false);
             snapshot.Connections.Clear(); main.SetSnapshotForTest(snapshot);
             Check(!measure.Enabled && Field<Label>(view, "status").Text.Contains("固定快照"), "Disappeared connection has only snapshot state");
             snapshot.Connections.Add(row); main.SetSnapshotForTest(snapshot); measure.PerformClick();
             typeof(MainForm).GetMethod("ShowMapExplorer", Private).Invoke(main, null); Application.DoEvents();
             Check(!view.Visible && hops.Items.Count == 0 && Field<ConnectionInfo>(view, "pinned") == null &&
-                !Field<bool>(Field<WorldMapControl>(view, "map"), "_routeMode"), "Distribution clears pinned connection and measured hops");
+                !Field<bool>(Field<WorldMapControl>(view, "map"), "_routeMode") &&
+                Field<bool>(distributionMap, "_routeDemo") && Field<bool>(distributionMap, "_routeUploading") &&
+                Field<bool>(distributionMap, "_routeDownloading"), "Returning to distribution clears the pin and shows its labeled demo route");
+            entryDemoTimer.Interval = 350;
+            PumpFor(450);
+            Check(!Field<bool>(distributionMap, "_routeDemo"), "The entry demo clears after its short playback.");
+            entryDemoTimer.Interval = 6500;
+            typeof(MainForm).GetMethod("ShowConnections", Private).Invoke(main, null); Application.DoEvents();
+            Check(!page.Visible, "Leaving the map hides its cached page");
+            typeof(MainForm).GetMethod("ShowMapExplorer", Private).Invoke(main, null); Application.DoEvents();
+            Check(page.Visible && Field<bool>(distributionMap, "_routeDemo"),
+                "Re-entering the cached distribution map starts a fresh entry demo.");
             main.Close();
         }
     }
@@ -135,6 +206,17 @@ internal static class WorldMapRouteChecks
             map.DrawToBitmap(bitmap, new Rectangle(Point.Empty, map.Size));
             if (file != null) bitmap.Save(file, System.Drawing.Imaging.ImageFormat.Png);
         }
+    }
+
+    private static void PumpFor(int milliseconds)
+    {
+        System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
+        while (elapsed.ElapsedMilliseconds < milliseconds)
+        {
+            Application.DoEvents();
+            System.Threading.Thread.Sleep(5);
+        }
+        Application.DoEvents();
     }
 
     private static void Check(bool condition, string message)

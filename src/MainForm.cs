@@ -52,6 +52,7 @@ namespace RouteLens
         private Label _detailHost, _detailRoute, _detailRule, _detailAttribution, _detailTraffic, _detailPath, _detailInbound;
         private TableLayoutPanel _workspace;
         private TableLayoutPanel _rootLayout;
+        private TableLayoutPanel _shell;
         private Panel _pageHost;
         private Control _currentPage;
         private string _activePage = "connections";
@@ -67,12 +68,18 @@ namespace RouteLens
         private ConnectionGrid _grid;
         private float _dpiScale = 1f;
         private bool _updatingChrome;
+        private bool _sizingStyleEnabled;
+        private bool _nativeSizing;
+        private int _detailsHintMode = -1;
         private WindowResizeGrip _resizeGrip;
         private WindowDragSurface _dragSurface;
         private Size _chromeSize;
         private FormWindowState _chromeState;
         private float _chromeScale;
         private bool _movingOrSizing;
+        private bool _resizePreviewActive;
+        private bool _resizePreviewShellVisible;
+        private Bitmap _resizePreviewFrame;
 
         [DllImport("user32.dll")] private static extern bool ReleaseCapture();
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
@@ -112,7 +119,9 @@ namespace RouteLens
                 }
                 AdaptWorkspace(); _brandMark.PlayEntrance(); _sampleTimer.Start(); _viewTimer.Start(); _geo.RefreshEgress(); _dns.Start(); RenderView(); await SampleAsync();
             };
-            Resize += delegate { AdaptWorkspace(); Invalidate(); };
+            // A client-size change already schedules a paint. Invalidate here as well
+            // doubled the visible map's resize paints (one from WM_SIZE, one explicit).
+            Resize += delegate { if (!_resizePreviewActive) AdaptWorkspace(); };
             KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 if (_activePage != "connections") return;
@@ -131,7 +140,7 @@ namespace RouteLens
             // The original connection view keeps its row indices; navigation now
             // lives above every page instead of being part of this view.
             root.RowStyles[0].Height = 0;
-            TableLayoutPanel shell = Table(1); shell.RowCount = 3; shell.RowStyles.Clear();
+            TableLayoutPanel shell = Table(1); _shell = shell; shell.RowCount = 3; shell.RowStyles.Clear();
             shell.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
             shell.RowStyles.Add(new RowStyle(SizeType.Absolute, 58)); shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             _usageStrip = new UsageStrip(_dailySites); shell.Controls.Add(_usageStrip, 0, 0);
@@ -430,8 +439,13 @@ namespace RouteLens
             float logicalWidth = ClientSize.Width / _dpiScale; bool show = _inspectorRequested && logicalWidth >= 1280;
             float inspectorWidth = show ? 294 * _dpiScale : 0;
             if (Math.Abs(_workspace.ColumnStyles[1].Width - inspectorWidth) > 0.1f) _workspace.ColumnStyles[1].Width = inspectorWidth;
-            _inspector.Visible = show; _detailsButton.Enabled = true;
-            _tips.SetToolTip(_detailsButton, logicalWidth < 1280 ? "打开所选连接的完整信息，双击列表行也可查看。" : "展开或收起所选连接详情；双击列表行可打开完整信息。");
+            if (_inspector.Visible != show) _inspector.Visible = show;
+            int hintMode = logicalWidth < 1280 ? 1 : 0;
+            if (_detailsHintMode != hintMode)
+            {
+                _tips.SetToolTip(_detailsButton, hintMode == 1 ? "打开所选连接的完整信息，双击列表行也可查看。" : "展开或收起所选连接详情；双击列表行可打开完整信息。");
+                _detailsHintMode = hintMode;
+            }
         }
         private static TableLayoutPanel Table(int columns) { TableLayoutPanel table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = columns, RowCount = 1, Margin = new Padding(0), Padding = new Padding(0), BackColor = Color.Transparent }; table.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); return table; }
         private static Label LabelAt(string text, float size, FontStyle style, Color color) { return new Label { Text = text, ForeColor = color, BackColor = Color.Transparent, Font = new Font("Microsoft YaHei UI", size, style), Margin = new Padding(0), UseMnemonic = false }; }
@@ -899,6 +913,7 @@ namespace RouteLens
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
+            _sizingStyleEnabled = false;
             _chromeSize = Size.Empty;
             using (Graphics graphics = CreateGraphics()) _dpiScale = graphics.DpiX / 96f;
             UpdateWindowChrome();
@@ -906,16 +921,42 @@ namespace RouteLens
         protected override void OnResizeBegin(EventArgs e)
         {
             _movingOrSizing = true;
+            if (_resizePreviewFrame == null && Visible && WindowState == FormWindowState.Normal)
+                _resizePreviewFrame = CaptureResizePreview();
             base.OnResizeBegin(e);
         }
         protected override void OnResizeEnd(EventArgs e)
         {
             base.OnResizeEnd(e);
             _movingOrSizing = false;
+            bool completedResize = _nativeSizing;
+            _nativeSizing = false;
+            if (_resizePreviewActive)
+            {
+                FinishResizePreview();
+            }
+            else if (completedResize)
+            {
+                _chromeSize = Size.Empty;
+                UpdateWindowChrome();
+            }
             if (_grid != null) RenderView();
+            if (_resizePreviewFrame != null)
+            {
+                _resizePreviewFrame.Dispose();
+                _resizePreviewFrame = null;
+            }
         }
         protected override void OnResize(EventArgs e)
         {
+            if (_movingOrSizing && !_nativeSizing && WindowState == FormWindowState.Normal && _chromeSize != Size)
+            {
+                _nativeSizing = true;
+                BeginResizePreview();
+                // Avoid reallocating an HRGN for every WM_SIZE. Keep the full client
+                // surface available during the native sizing loop, then round once.
+                WindowChrome.ClearCorners(this);
+            }
             base.OnResize(e); UpdateWindowChrome();
         }
         protected override void OnClientSizeChanged(EventArgs e)
@@ -924,7 +965,7 @@ namespace RouteLens
         }
         protected override void OnStyleChanged(EventArgs e)
         {
-            base.OnStyleChanged(e); UpdateWindowChrome();
+            base.OnStyleChanged(e); _sizingStyleEnabled = false; UpdateWindowChrome();
         }
         private void UpdateWindowChrome()
         {
@@ -933,7 +974,12 @@ namespace RouteLens
             try
             {
                 // Docked pages must not cover the form's resize hit targets.
-                WindowChrome.EnableNativeSizing(Handle);
+                if (!_sizingStyleEnabled)
+                {
+                    WindowChrome.EnableNativeSizing(Handle);
+                    _sizingStyleEnabled = true;
+                }
+                if (_resizePreviewActive) return;
                 if (_chromeSize == Size && _chromeState == WindowState && _chromeScale == _dpiScale) return;
                 int edge = WindowState == FormWindowState.Normal ? Math.Max(8, (int)Math.Ceiling(8 * _dpiScale)) : 0;
                 Padding padding = new Padding(edge);
@@ -941,15 +987,17 @@ namespace RouteLens
                 if (_resizeGrip != null)
                 {
                     int grip = (int)Math.Ceiling(24 * _dpiScale);
-                    _resizeGrip.SetBounds(ClientSize.Width - grip - 2, ClientSize.Height - grip - 2, grip, grip);
-                    _resizeGrip.Visible = WindowState == FormWindowState.Normal;
-                    _resizeGrip.BringToFront();
+                    Rectangle bounds = new Rectangle(ClientSize.Width - grip - 2, ClientSize.Height - grip - 2, grip, grip);
+                    if (_resizeGrip.Bounds != bounds) _resizeGrip.Bounds = bounds;
+                    bool visible = WindowState == FormWindowState.Normal;
+                    if (_resizeGrip.Visible != visible) _resizeGrip.Visible = visible;
+                    if (_resizeGrip.Parent == this && Controls.GetChildIndex(_resizeGrip) != 0) _resizeGrip.BringToFront();
                 }
-                WindowChrome.ApplyCorners(this, _dpiScale);
+                if (!_movingOrSizing) WindowChrome.ApplyCorners(this, _dpiScale);
                 _chromeSize = Size; _chromeState = WindowState; _chromeScale = _dpiScale;
             }
             finally { _updatingChrome = false; }
-            Invalidate();
+            if (!_movingOrSizing) Invalidate();
         }
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
@@ -975,14 +1023,99 @@ namespace RouteLens
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
+            if (_resizePreviewActive && _resizePreviewFrame != null)
+            {
+                e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                e.Graphics.DrawImage(_resizePreviewFrame, ClientRectangle);
+                return;
+            }
             if (WindowState != FormWindowState.Normal || Width < 2 || Height < 2) return;
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             using (Pen pen = new Pen(UiPalette.Border))
             using (System.Drawing.Drawing2D.GraphicsPath path = UiPaint.RoundedPath(new RectangleF(0.5f, 0.5f, ClientSize.Width - 1, ClientSize.Height - 1), 12 * _dpiScale))
                 e.Graphics.DrawPath(pen, path);
         }
+
+        private void BeginResizePreview()
+        {
+            if (_resizePreviewActive || !Visible || WindowState != FormWindowState.Normal ||
+                ClientSize.Width < 2 || ClientSize.Height < 2) return;
+
+            Bitmap frame = _resizePreviewFrame ?? CaptureResizePreview();
+            if (frame == null) return;
+
+            _resizePreviewFrame = frame;
+            _resizePreviewShellVisible = _shell != null && _shell.Visible;
+            _resizePreviewActive = true;
+            _nativeSizing = true;
+            SuspendLayout();
+            if (_shell != null) _shell.Visible = false;
+            if (_themeTransition != null) _themeTransition.Stop();
+            if (_resizeGrip != null) _resizeGrip.Visible = false;
+            WindowChrome.ClearCorners(this);
+            Invalidate();
+            Update();
+        }
+
+        private Bitmap CaptureResizePreview()
+        {
+            Bitmap frame = null;
+            try
+            {
+                frame = new Bitmap(ClientSize.Width, ClientSize.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                DrawToBitmap(frame, new Rectangle(Point.Empty, frame.Size));
+                return frame;
+            }
+            catch (OutOfMemoryException) { if (frame != null) frame.Dispose(); }
+            catch (ArgumentException) { if (frame != null) frame.Dispose(); }
+            catch (ExternalException) { if (frame != null) frame.Dispose(); }
+            catch (InvalidOperationException) { if (frame != null) frame.Dispose(); }
+
+            frame = null;
+            try
+            {
+                frame = new Bitmap(ClientSize.Width, ClientSize.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                using (Graphics graphics = Graphics.FromImage(frame))
+                    graphics.CopyFromScreen(PointToScreen(Point.Empty), Point.Empty, ClientSize, CopyPixelOperation.SourceCopy);
+                return frame;
+            }
+            catch (ArgumentException) { }
+            catch (ExternalException) { }
+            catch (InvalidOperationException) { }
+            catch (OutOfMemoryException) { }
+            if (frame != null) frame.Dispose();
+            return null;
+        }
+
+        private void FinishResizePreview()
+        {
+            _resizePreviewActive = false;
+            ResumeLayout(false);
+            if (_shell != null) _shell.Visible = _resizePreviewShellVisible;
+            _chromeSize = Size.Empty;
+            UpdateWindowChrome();
+            AdaptWorkspace();
+            PerformLayout();
+            if (_resizePreviewFrame != null)
+            {
+                _resizePreviewFrame.Dispose();
+                _resizePreviewFrame = null;
+            }
+            Invalidate(true);
+        }
+
         protected override void WndProc(ref Message m)
         {
+            if (m.Msg == 0x00A1 && IsResizeHit(m.WParam.ToInt32())) // WM_NCLBUTTONDOWN on a resize edge.
+                BeginResizePreview();
+            if (m.Msg == 0x0214 && !_nativeSizing) // WM_SIZING, unlike window movement.
+            {
+                if (_resizePreviewFrame == null) _resizePreviewFrame = CaptureResizePreview();
+                BeginResizePreview();
+                _nativeSizing = true;
+                WindowChrome.ClearCorners(this);
+            }
             if (m.Msg == 0x83) { m.Result = IntPtr.Zero; return; } // WM_NCCALCSIZE: custom frame fills the HWND.
             if (m.Msg == 0x84 && WindowState == FormWindowState.Normal)
             {
@@ -997,6 +1130,12 @@ namespace RouteLens
             if (m.Msg == 0x24) WindowChrome.SetMaximizedWorkArea(Handle, m.LParam);
             if (m.Msg == 0x84 && WindowState == FormWindowState.Maximized && m.Result.ToInt64() >= 10 && m.Result.ToInt64() <= 17) m.Result = new IntPtr(1);
         }
+
+        private static bool IsResizeHit(int hit)
+        {
+            return hit >= 10 && hit <= 17;
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             base.OnFormClosing(e); if (e.Cancel) return;
@@ -1004,6 +1143,7 @@ namespace RouteLens
             if (e.CloseReason == CloseReason.UserClosing && _pages.TryGetValue("investigation", out page) &&
                 !((InvestigationDialog)page).ConfirmDiscardDrafts()) { e.Cancel = true; return; }
             _closing = true; _sourceGeneration++; _sampleTimer.Stop(); _viewTimer.Stop();
+            if (_resizePreviewFrame != null) { _resizePreviewFrame.Dispose(); _resizePreviewFrame = null; }
             _dragSurface.Dispose();
             _pageTransition.Stop(); foreach (Form cached in _pages.Values) cached.Dispose(); _pages.Clear();
             _themeTransition.Stop();

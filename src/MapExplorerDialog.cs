@@ -36,15 +36,20 @@ namespace RouteLens
         private readonly Timer _timer = new Timer();
         private readonly WorldMapControl _map;
         private readonly ComboBox _countryPicker;
+        private readonly ModernButton _playDemo;
         private readonly Label _connectionCount, _selectionName, _selectionMeta, _missingDomains, _status, _coverage;
         private readonly CountryRankList _programs, _domains;
-        private bool _syncing, _shown;
+        private bool _syncing, _shown, _demoPlayedThisEntry;
         private string _selectedCode;
         private ConnectionPathView _pathView;
 
         internal void PinConnection(ConnectionInfo item, NetworkSnapshot snapshot, Func<NetworkSnapshot> current,
             Func<ConnectionInfo, TrafficReport> rates, Func<string, GeoResult> lookup, Func<bool> paused)
         {
+            // A selected connection replaces the entry preview. If the user returns
+            // to country distribution during this visit, play the preview there.
+            _demoPlayedThisEntry = false;
+            _map.ClearRoute();
             if (_pathView == null)
             {
                 _pathView = new ConnectionPathView(current, rates, lookup, paused, ShowDistribution);
@@ -56,8 +61,16 @@ namespace RouteLens
 
         internal void ShowDistribution()
         {
-            if (_pathView == null) return;
-            _pathView.ClearPin(); _pathView.Hide(); RefreshSnapshot();
+            bool returningFromPath = _pathView != null && _pathView.Visible;
+            if (_pathView != null) { _pathView.ClearPin(); _pathView.Hide(); }
+            if (returningFromPath) _demoPlayedThisEntry = false;
+            if (returningFromPath || (_shown && Visible && !_demoPlayedThisEntry)) _map.ClearRoute();
+            RefreshSnapshot();
+            if (_shown && Visible && !_demoPlayedThisEntry)
+            {
+                _demoPlayedThisEntry = true;
+                _map.PlayDemoRoute();
+            }
         }
 
         internal void RefreshPath()
@@ -85,7 +98,7 @@ namespace RouteLens
             Controls.Add(root);
 
             TableLayoutPanel heading = new TableLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0), ColumnCount = 2, RowCount = 1 };
-            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
+            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 360));
             heading.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             Panel headingText = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
             Label title = new Label { Text = "世界地图与国家详情", Dock = DockStyle.Top, Height = 38,
@@ -98,8 +111,11 @@ namespace RouteLens
             Label zoomLevel = MakeLabel("100%", 9f, UiPalette.Muted); zoomLevel.Dock = DockStyle.None; zoomLevel.Size = new Size(52, 38); zoomLevel.TextAlign = ContentAlignment.MiddleCenter; zoomLevel.AccessibleName = "地图缩放比例";
             ModernButton zoomIn = new ModernButton { Text = "+", Width = 42, Height = 38, Margin = new Padding(5, 0, 6, 0), Font = UiPalette.Body(12), AccessibleName = "放大地图" };
             ModernButton zoomReset = new ModernButton { Text = "重置", Width = 76, Height = 38, Margin = new Padding(0), AccessibleName = "重置地图缩放与位置" };
+            _playDemo = new ModernButton { Text = "播放示例动画", IconName = "play", Width = 104, Height = 38,
+                Margin = new Padding(8, 0, 0, 0), AccessibleName = "播放明确标记的地图路线示例动画" };
             zoomOut.Click += delegate { _map.ZoomOut(); }; zoomIn.Click += delegate { _map.ZoomIn(); }; zoomReset.Click += delegate { _map.ResetZoom(); };
-            zoomBar.Controls.Add(zoomOut); zoomBar.Controls.Add(zoomLevel); zoomBar.Controls.Add(zoomIn); zoomBar.Controls.Add(zoomReset);
+            _playDemo.Click += delegate { _map.PlayDemoRoute(); };
+            zoomBar.Controls.Add(zoomOut); zoomBar.Controls.Add(zoomLevel); zoomBar.Controls.Add(zoomIn); zoomBar.Controls.Add(zoomReset); zoomBar.Controls.Add(_playDemo);
             heading.Controls.Add(zoomBar, 1, 0); root.Controls.Add(heading, 0, 0);
 
             TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0), Padding = new Padding(0),
@@ -109,7 +125,7 @@ namespace RouteLens
             content.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.Controls.Add(content, 0, 1);
 
             RoundedPanel mapCard = new RoundedPanel { Dock = DockStyle.Fill, Padding = new Padding(3), Margin = new Padding(0, 0, 14, 0) };
-            _map = new WorldMapControl { Dock = DockStyle.Fill, ShowExpandButton = false, TabIndex = 0 };
+            _map = new WorldMapControl { Dock = DockStyle.Fill, ShowExpandButton = false, ShowTrafficDemoButton = false, TabIndex = 0 };
             _map.CountrySelected += SetCountry;
             Action<float> updateZoom = delegate(float zoom) { zoomLevel.Text = (zoom * 100f).ToString("0") + "%"; zoomOut.Enabled = zoom > 1.001f; zoomReset.Enabled = zoom > 1.001f; zoomIn.Enabled = zoom < 7.999f; };
             _map.ZoomChanged += updateZoom; updateZoom(_map.ZoomFactor);
@@ -172,8 +188,9 @@ namespace RouteLens
             Shown += delegate { _shown = true; FitWorkingArea(); RefreshSnapshot(); _timer.Start(); };
             VisibleChanged += delegate
             {
-                if (!_shown || IsDisposed || Disposing) return;
-                if (Visible) { RefreshSnapshot(); _timer.Start(); } else _timer.Stop();
+                if (IsDisposed || Disposing) return;
+                if (Visible) { _shown = true; _demoPlayedThisEntry = false; RefreshSnapshot(); _timer.Start(); }
+                else if (_shown) { _demoPlayedThisEntry = false; _timer.Stop(); }
             };
             FormClosed += delegate { _timer.Stop(); };
             RefreshSnapshot();

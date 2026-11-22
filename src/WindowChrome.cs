@@ -50,6 +50,14 @@ namespace RouteLens
             if (previous != null) previous.Dispose();
         }
 
+        internal static void ClearCorners(Form form)
+        {
+            Region previous = form.Region;
+            if (previous == null) return;
+            form.Region = null;
+            previous.Dispose();
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct MinMaxInfo
         {

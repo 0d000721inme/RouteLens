@@ -11,24 +11,28 @@ namespace RouteLens
 {
     internal sealed class ConnectionPathView : UserControl
     {
-        private readonly WorldMapControl map = new WorldMapControl { Dock = DockStyle.Fill, ShowExpandButton = false };
+        private readonly WorldMapControl map = new WorldMapControl { Dock = DockStyle.Fill, ShowExpandButton = false, ShowTrafficDemoButton = false };
         private readonly ComboBox origin = Choice("本地位置未设", "南通市");
         private readonly ComboBox remote = Choice("按地址定位", "手动标注中国香港");
         private readonly Label heading = Caption(16), metadata = Caption(9), status = Caption(9);
         private readonly ListView hops = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true,
             HeaderStyle = ColumnHeaderStyle.Nonclickable, HideSelection = false, AccessibleName = "本机 ICMP 逐跳结果" };
         private readonly ModernButton measure = new ModernButton { Text = "测量本机路径", AutoSize = false, Width = 124, Height = 32 };
+        private readonly ModernButton demo = new ModernButton { Text = "播放示例动画", AutoSize = false, Width = 116, Height = 32,
+            AccessibleName = "播放明确标记的地图方向动画示例" };
         private readonly List<WorldMapRoutePoint> hopPlaces = new List<WorldMapRoutePoint>();
         private readonly Func<string, GeoResult> lookup;
         private readonly Func<ConnectionInfo, TrafficReport> getTraffic;
         private readonly Func<NetworkSnapshot> getSnapshot;
         private readonly Func<bool> isPaused;
         private readonly System.Windows.Forms.Timer refresh = new System.Windows.Forms.Timer { Interval = 900 };
+        private readonly System.Windows.Forms.Timer demoTimer = new System.Windows.Forms.Timer { Interval = 6500 };
         private CancellationTokenSource measuring;
         private ConnectionInfo pinned;
         private string source;
         private string traceStatus = "";
         private WorldMapRoutePoint customOrigin;
+        private bool demoPlaying;
 
         public ConnectionPathView(Func<NetworkSnapshot> snapshot, Func<ConnectionInfo, TrafficReport> traffic,
             Func<string, GeoResult> geo, Func<bool> paused, Action back)
@@ -58,18 +62,20 @@ namespace RouteLens
             };
             remote.SelectedIndexChanged += delegate { UpdateView(); };
             measure.Click += async delegate { await MeasureAsync(); };
+            demo.Click += delegate { PlayExampleAnimation(); };
             ModernButton close = new ModernButton { Text = "国家分布", Width = 98, Height = 32 };
             close.Click += delegate { back(); };
-            actions.Controls.AddRange(new Control[] { origin, remote, measure, close });
+            actions.Controls.AddRange(new Control[] { origin, remote, measure, demo, close });
             layout.Controls.Add(actions, 0, 2); layout.Controls.Add(map, 0, 3); layout.Controls.Add(status, 0, 4);
             hops.Columns.Add("跳数", 58); hops.Columns.Add("响应地址", 270); hops.Columns.Add("耗时", 78);
             hops.Columns.Add("IP 归属", 145); hops.Columns.Add("探测结果", 240); layout.Controls.Add(hops, 0, 5);
             refresh.Tick += delegate { UpdateView(); };
+            demoTimer.Tick += delegate { demoTimer.Stop(); demoPlaying = false; map.ClearRoute(); UpdateView(); };
             VisibleChanged += delegate
             {
                 if (IsDisposed || Disposing) return;
                 if (Visible && pinned != null) { UpdateView(); refresh.Start(); }
-                else { refresh.Stop(); StopTrace(); map.SetRouteTraffic(false, false); }
+                else { refresh.Stop(); demoTimer.Stop(); demoPlaying = false; StopTrace(); map.ClearRoute(); map.SetRouteTraffic(false, false); }
             };
         }
 
@@ -111,7 +117,7 @@ namespace RouteLens
 
         internal void ClearPin()
         {
-            refresh.Stop(); StopTrace(); pinned = null; source = "";
+            refresh.Stop(); demoTimer.Stop(); demoPlaying = false; StopTrace(); pinned = null; source = "";
             traceStatus = ""; hops.Items.Clear(); hopPlaces.Clear(); map.SetRouteHops(null);
             map.ClearRoute();
         }
@@ -153,6 +159,14 @@ namespace RouteLens
             metadata.Text = (pinned.ProcessName ?? "未识别程序") + "   →   " + (String.IsNullOrEmpty(pinned.Inbound) ? (pinned.DataSource ?? "Windows") : pinned.Inbound)
                 + "   →   " + (String.IsNullOrEmpty(pinned.ProxyChain) ? "策略链未提供" : pinned.ProxyChain) + "   →   " + (target ?? "目标未知")
                 + "\r\n" + (Proxied ? "内核报告出站端点 " + (String.IsNullOrEmpty(pinned.OutboundAddress) ? "未知" : pinned.OutboundAddress) + "   ·   隧道内部不可见" : "系统或内核报告目标 " + (pinned.RemoteAddress ?? "未知")) + "   ·   " + (pinned.Protocol ?? "");
+            demo.Enabled = !paused && live != null;
+            if (demoPlaying && (paused || live == null)) { demoPlaying = false; demoTimer.Stop(); map.ClearRoute(); }
+            if (demoPlaying)
+            {
+                status.Text = "示例路线动画 · 南通 → 香港 · 非实时连接或流量";
+                measure.Enabled = false;
+                return;
+            }
             WorldMapRoutePoint from = origin.SelectedIndex == 1 ? new WorldMapRoutePoint("南通市（手动）", "CN", new PointF(120.894f,31.981f)) : origin.SelectedIndex == 3 ? customOrigin : null;
             WorldMapRoutePoint to = remote.SelectedIndex == 1 ? new WorldMapRoutePoint("中国香港（手动）", "HK") : Locate(ProbeTarget);
             map.SetRoute(from, to); map.SetRouteHops(hopPlaces);
@@ -166,6 +180,12 @@ namespace RouteLens
             string activity = paused ? "采样已暂停 · 显示固定快照" : live == null ? "当前快照未见此连接 · 显示固定快照" : traffic == null || !traffic.Measuring ? "暂无可比较的流量样本" :
                 String.Format("↑ {0:0.#} KiB/s    ↓ {1:0.#} KiB/s", traffic.UploadPerSecond / 1024, traffic.DownloadPerSecond / 1024);
             status.Text = activity + "     ·     " + (traceStatus.Length > 0 ? traceStatus : canMeasure ? "本机 ICMP → " + address : "没有可测量的远端 IP");
+        }
+        private void PlayExampleAnimation()
+        {
+            if (pinned == null || CurrentConnection() == null || isPaused()) return;
+            StopTrace(); demoPlaying = true; traceStatus = "";
+            map.PlayDemoRoute(false); demoTimer.Stop(); demoTimer.Start(); UpdateView();
         }
         private void StopTrace()
         {
@@ -217,7 +237,7 @@ namespace RouteLens
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { refresh.Dispose(); StopTrace(); }
+            if (disposing) { refresh.Dispose(); demoTimer.Dispose(); StopTrace(); }
             base.Dispose(disposing);
         }
     }

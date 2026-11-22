@@ -104,7 +104,9 @@ internal static class WindowDragChecks
                 using (MainForm main = new MainForm(geo))
                 {
                     DisableCollectors(main); main.StartPosition = FormStartPosition.Manual; main.Bounds = new Rectangle(80, 80, 1180, 780);
-                    main.Show(); Pump(50);
+                    // Keep the fixture above unrelated browser/native windows so
+                    // WindowFromPoint reports the actual test application's HWND.
+                    main.TopMost = true; main.Show(); main.Activate(); Pump(50);
                     WindowDragSurface drag = Field<WindowDragSurface>(main, "_dragSurface");
                     foreach (string page in Pages) CheckPage(main, drag, page);
                     CheckControlBoundaries(main, drag);

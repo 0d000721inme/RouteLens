@@ -8,9 +8,9 @@ RouteLens is an open-source Windows network monitor for Clash / Mihomo. One moti
 
 ## 下载与运行
 
-v7.3.0 增加浅色/深色外观、订阅用量和站点流量顶栏、按程序下载提醒，以及选中连接的逐跳地图观察。配色设置保存在当前 Windows 用户的本地应用数据中。说明与验证见 [7.3.0 发布说明](docs/RELEASE-v7.3.0.md)。
+v7.3.1 改进地图方向动画入口，并优化地图和主窗口在连续缩放时的重绘。地图演示会明确标记为演示路线；窗口缩放期间先显示画面预览，停止调整后再恢复完整布局。卡顿来自同步绘制和布局响应，不是 C# 语言本身；WinForms/GDI+ 仍有性能边界。说明与验证见 [7.3.1 发布说明](docs/RELEASE-v7.3.1.md)。
 
-需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v7.3.0.zip`，解压后双击 `RouteLens.exe`；也可以下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v7.3.0/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
+需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v7.3.1.zip`，解压后双击 `RouteLens.exe`；也可以下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v7.3.1/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
 
 保持 Clash / Mihomo 运行，RouteLens 会尝试发现本机控制接口。普通权限可以使用连接、地图和流量视图；DNS 被动捕获需要管理员权限，权限不足时会标注检测受限。
 

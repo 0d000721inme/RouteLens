@@ -47,10 +47,13 @@ internal static class RenderSchedulingChecks
                     main.Width += 20; Application.DoEvents();
                     Check(regions == 1, "One resize should update the Region once, got " + regions);
                     Call(main, "OnResizeBegin", EventArgs.Empty);
+                    main.Width += 20;
+                    Check(main.Region == null, "Live native resize rebuilt a rounded region during WM_SIZE");
                     main.SetSnapshotForTest(Snapshot("after.example.test"));
                     Check(Field<NetworkSnapshot>(main, "_snapshot").Connections[0].Host == "after.example.test", "Moving stopped snapshot acceptance");
                     Check(Convert.ToString(grid.Rows[0].Cells["host"].Value) == "before.example.test", "Moving still refreshed the connection grid");
                     Call(main, "OnResizeEnd", EventArgs.Empty); Application.DoEvents();
+                    Check(main.Region != null, "Rounded region was not restored after native sizing ended");
                     Check(Convert.ToString(grid.Rows[0].Cells["host"].Value) == "after.example.test", "Move end did not render the latest snapshot");
                     main.Close();
                 }

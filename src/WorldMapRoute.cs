@@ -28,6 +28,7 @@ namespace RouteLens
         private static Color DownloadColor { get { return UiPalette.Success; } }
         private static Color HopColor { get { return UiPalette.IsDark ? Color.FromArgb(195, 166, 242) : Color.FromArgb(112, 91, 154); } }
         private readonly Timer _routeTimer = new Timer { Interval = 16 };
+        private readonly Timer _demoTimer = new Timer { Interval = 6500 };
         private readonly Stopwatch _routeElapsed = new Stopwatch();
         private long _routeNextMotionCheck;
         private readonly List<PointF?> _routeHops = new List<PointF?>();
@@ -36,7 +37,7 @@ namespace RouteLens
         private PointF? _routeSourcePosition, _routeDestinationPosition;
         private RouteCurve? _routeCurve;
         private Rectangle _routeDirtyBounds;
-        private bool _routeMode, _routeGeometryDirty, _routeUploading, _routeDownloading;
+        private bool _routeMode, _routeGeometryDirty, _routeUploading, _routeDownloading, _routeDemo;
         private float _distributionZoom, _distributionX, _distributionY;
 
         private struct RouteCurve
@@ -51,6 +52,22 @@ namespace RouteLens
             }
         }
 
+        public void PlayDemoRoute()
+        { PlayDemoRoute(true); }
+
+        internal void PlayDemoRoute(bool clearAutomatically)
+        {
+            ClearRoute();
+            SetRoute(new WorldMapRoutePoint("演示·南通", "CN", new PointF(120.894f, 31.981f)),
+                new WorldMapRoutePoint("演示·香港", "HK", new PointF(114.17f, 22.32f)));
+            _routeDemo = true;
+            _demoTimer.Stop();
+            if (clearAutomatically) _demoTimer.Start();
+            SetRouteTraffic(true, true);
+            UpdateRouteAccessibility();
+            Invalidate();
+        }
+
         public void SetRoute(WorldMapRoutePoint source, WorldMapRoutePoint destination)
         {
             PointF? sourcePosition = RoutePosition(source), destinationPosition = RoutePosition(destination);
@@ -63,6 +80,7 @@ namespace RouteLens
                 _distributionY = _centerY;
             }
             if (_routeMode && !refit && SameLabel(source, _routeSource) && SameLabel(destination, _routeDestination)) return;
+            ClearResizePreviewLayer();
             _routeMode = true;
             _routeSource = source;
             _routeDestination = destination;
@@ -109,6 +127,8 @@ namespace RouteLens
 
         public void ClearRoute()
         {
+            _demoTimer.Stop();
+            _routeDemo = false;
             if (!_routeMode) return;
             _routeMode = false;
             _routeSource = _routeDestination = null;
@@ -188,7 +208,7 @@ namespace RouteLens
         {
             if (!_routeMode || !_routeSourcePosition.HasValue || !_routeDestinationPosition.HasValue ||
                 _routeSourcePosition == _routeDestinationPosition || (!_routeUploading && !_routeDownloading) ||
-                !Visible || IsDisposed || Disposing || !IsHandleCreated || !PageTransition.AnimationsEnabled)
+                !Visible || IsDisposed || Disposing || !IsHandleCreated || _resizePreview || !PageTransition.AnimationsEnabled)
             {
                 StopRouteTimer();
                 return;
@@ -403,24 +423,30 @@ namespace RouteLens
             int inset = S(20, scale), width = Math.Max(0, Width - 2 * inset);
             UiPaint.DrawIcon(graphics, "globe", new Rectangle(inset, S(14, scale), S(18, scale), S(18, scale)), UiPalette.Accent, 1.5f);
             DrawText(graphics, "连接路径地图", _titleFont, new Rectangle(inset + S(27, scale), S(13, scale), width, S(22, scale)), UiPalette.Ink, TextFormatFlags.Left);
-            string coverage = !_routeSourcePosition.HasValue && !_routeDestinationPosition.HasValue ? "起点与终点均未定位" :
+            string coverage = _routeDemo ? "示例动画 · 演示路线和流量，不代表实际连接" :
+                !_routeSourcePosition.HasValue && !_routeDestinationPosition.HasValue ? "起点与终点均未定位" :
                 !_routeSourcePosition.HasValue ? "起点未定位" : !_routeDestinationPosition.HasValue ? "终点未定位" : "虚线为端点示意";
+            if (!PageTransition.AnimationsEnabled && (_routeUploading || _routeDownloading))
+                coverage += " · 系统动画已关闭，方向箭头静态显示";
             DrawText(graphics, coverage, _bodyFont, new Rectangle(inset, S(38, scale), width, S(19, scale)), UiPalette.Muted, TextFormatFlags.Left);
             int top = Height - S(28, scale);
-            DrawText(graphics, _routeUploading ? "↑ 上传" : "上传空闲", _bodyFont,
-                new Rectangle(inset, top, S(65, scale), S(19, scale)), _routeUploading ? UploadColor : UiPalette.Muted, TextFormatFlags.Left);
-            DrawText(graphics, _routeDownloading ? "↓ 下载" : "下载空闲", _bodyFont,
-                new Rectangle(inset + S(68, scale), top, S(65, scale), S(19, scale)), _routeDownloading ? DownloadColor : UiPalette.Muted, TextFormatFlags.Left);
+            DrawText(graphics, _routeUploading ? (_routeDemo ? "↑ 示例上传" : "↑ 上传") : "上传空闲", _bodyFont,
+                new Rectangle(inset, top, S(82, scale), S(19, scale)), _routeUploading ? UploadColor : UiPalette.Muted, TextFormatFlags.Left);
+            DrawText(graphics, _routeDownloading ? (_routeDemo ? "↓ 示例下载" : "↓ 下载") : "下载空闲", _bodyFont,
+                new Rectangle(inset + S(86, scale), top, S(82, scale), S(19, scale)), _routeDownloading ? DownloadColor : UiPalette.Muted, TextFormatFlags.Left);
             if (_routeHops.Count > 0)
-                DrawText(graphics, "逐跳 · 国家代表点", _bodyFont, new Rectangle(inset + S(139, scale), top,
-                    Math.Max(0, width - S(139, scale)), S(19, scale)), HopColor, TextFormatFlags.Left);
+                DrawText(graphics, "逐跳 · 国家代表点", _bodyFont, new Rectangle(inset + S(174, scale), top,
+                    Math.Max(0, width - S(174, scale)), S(19, scale)), HopColor, TextFormatFlags.Left);
         }
 
         private void UpdateRouteAccessibility()
         {
+            string motionStatus = !PageTransition.AnimationsEnabled && (_routeUploading || _routeDownloading)
+                ? "系统动画已关闭，上传和下载方向以静态箭头表示。" : "";
             AccessibleDescription = "连接路径地图。起点 " + RouteLabel(_routeSource, "未知") + "，终点 " + RouteLabel(_routeDestination, "未知") +
                 "。虚线为端点示意，逐跳图层使用国家代表点。" + (_routeUploading ? "正在上传。" : "上传空闲。") +
-                (_routeDownloading ? "正在下载。" : "下载空闲。");
+                (_routeDownloading ? "正在下载。" : "下载空闲。") + motionStatus +
+                (_routeDemo ? " 当前是演示路线与方向动画，不代表实际连接或流量。" : "");
         }
     }
 }

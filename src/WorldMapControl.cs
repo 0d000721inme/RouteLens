@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -56,15 +57,23 @@ namespace RouteLens
         private readonly Font _bodyFont = UiPalette.Body(8.4f);
         private readonly Font _numberFont = UiPalette.Mono(8.5f);
         private readonly ToolTip _tips = new ToolTip();
+        private readonly Timer _resizeSettleTimer = new Timer { Interval = 140 };
         private readonly ModernButton _expandButton;
+        private readonly ModernButton _trafficDemoButton;
         private readonly List<CountryStat> _countries = new List<CountryStat>();
         private readonly List<ProjectedCountry> _projected = new List<ProjectedCountry>();
         private readonly Dictionary<string, ProjectedCountry> _byCode = new Dictionary<string, ProjectedCountry>(StringComparer.OrdinalIgnoreCase);
         private readonly List<MapMarker> _markers = new List<MapMarker>();
         private Bitmap _baseLayer;
+        private Bitmap _resizePreviewLayer;
         private RectangleF _mapBounds;
+        private Size _cachedLayerSize;
         private float _cacheDpi;
         private bool _cacheDark;
+        private bool _resizePreview;
+        private int _baseLayerBuildCount;
+        private int _resizePreviewBuildCount;
+        private long _lastBaseLayerBuildMilliseconds;
         private int _total;
         private int _unknown;
         private int _mappedCount;
@@ -76,6 +85,7 @@ namespace RouteLens
         private bool _keyboardMode;
         private Point? _pointerLocation;
         private bool _showExpandButton = true;
+        private bool _showTrafficDemoButton = true;
         private float _zoom = 1f, _centerX = .5f, _centerY = .5f;
         private string _focusCountryCode;
         private bool _panning, _panMoved, _suppressClick;
@@ -98,6 +108,23 @@ namespace RouteLens
                 Font = UiPalette.Body(8.5f), AccessibleName = "放大地图并查看国家详情", TabIndex = 0 };
             _expandButton.Click += delegate { Action handler = ExpandRequested; if (handler != null) handler(); };
             Controls.Add(_expandButton);
+            _trafficDemoButton = new ModernButton { Text = "流量动画", IconName = "play", Quiet = true,
+                Font = UiPalette.Body(8.5f), AccessibleName = "播放示例连接路径和上下行方向动画",
+                AccessibleDescription = "播放南通到香港的示例动画，路线和流量不代表实际连接" };
+            _trafficDemoButton.Click += delegate { PlayDemoRoute(); };
+            _tips.SetToolTip(_trafficDemoButton, "播放6.5秒的南通↔香港双向演示，不代表实时连接、地点或流量。");
+            Controls.Add(_trafficDemoButton);
+            _demoTimer.Tick += delegate { _demoTimer.Stop(); ClearRoute(); };
+            _resizeSettleTimer.Tick += delegate
+            {
+                _resizeSettleTimer.Stop();
+                _resizePreview = false;
+                ClearResizePreviewLayer();
+                _pointerLocation = null;
+                ClearProjection();
+                Invalidate();
+                UpdateRouteTimer();
+            };
             _routeTimer.Tick += AdvanceRouteTraffic;
             LayoutExpandButton();
             EnsureMapLoaded();
@@ -168,6 +195,12 @@ namespace RouteLens
             set { _showExpandButton = value; if (_expandButton != null) _expandButton.Visible = value && !_routeMode; Invalidate(); }
         }
 
+        public bool ShowTrafficDemoButton
+        {
+            get { return _showTrafficDemoButton; }
+            set { _showTrafficDemoButton = value; if (_trafficDemoButton != null) _trafficDemoButton.Visible = value; LayoutExpandButton(); }
+        }
+
         public string SelectedCode { get { return _selectedCode; } }
 
         public void SetData(List<CountryStat> countries, int total, int unknown, string selectedCode)
@@ -199,6 +232,7 @@ namespace RouteLens
                     if (next[i].Code != _countries[i].Code || next[i].Name != _countries[i].Name || next[i].Count != _countries[i].Count)
                     { changed = true; break; }
             if (!changed) return;
+            ClearResizePreviewLayer();
             _countries.Clear();
             _countries.AddRange(next);
             _total = safeTotal;
@@ -229,10 +263,101 @@ namespace RouteLens
             // FillRectangle deliberately retains the invalidation clip. Graphics.Clear
             // and unbounded GDI text would corrupt neighbouring native controls.
             using (Brush brush = new SolidBrush(BackColor)) graphics.FillRectangle(brush, ClientRectangle);
+            if (_resizePreview && _baseLayer != null)
+            {
+                DrawResizePreview(graphics);
+                return;
+            }
             EnsureProjection(graphics.DpiX, graphics.DpiY);
-            if (_baseLayer != null) graphics.DrawImageUnscaled(_baseLayer, 0, 0);
+            if (_resizePreviewLayer == null) BuildResizePreviewLayer();
+            DrawCurrentScene(graphics, e.ClipRectangle);
+        }
+
+        private void DrawCurrentScene(Graphics graphics, Rectangle clip)
+        {
+            if (_resizePreviewLayer != null) graphics.DrawImageUnscaled(_resizePreviewLayer, 0, 0);
+            else if (_baseLayer != null) graphics.DrawImageUnscaled(_baseLayer, 0, 0);
             float scale = graphics.DpiX / 96f;
-            if (_routeMode) { DrawRoute(graphics, scale, e.ClipRectangle); return; }
+            if (_routeMode) { DrawRoute(graphics, scale, clip); return; }
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            // Draw the least prominent marks first so the largest country counts stay legible.
+            GraphicsState state = graphics.Save();
+            graphics.SetClip(_mapBounds, CombineMode.Intersect);
+            for (int i = _markers.Count - 1; i >= 0; i--) DrawMarker(graphics, _markers[i], i, scale);
+            graphics.Restore(state);
+            DrawHeading(graphics, scale);
+            DrawFooter(graphics, scale);
+        }
+
+        private void DrawResizePreview(Graphics graphics)
+        {
+            if (_resizePreviewLayer == null) BuildResizePreviewLayer();
+            if (_resizePreviewLayer == null) return;
+            GraphicsState state = graphics.Save();
+            graphics.InterpolationMode = InterpolationMode.Low;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+            graphics.DrawImage(_resizePreviewLayer, ClientRectangle, 0, 0,
+                _resizePreviewLayer.Width, _resizePreviewLayer.Height, GraphicsUnit.Pixel);
+            graphics.Restore(state);
+
+            float horizontalScale = Width / (float)_resizePreviewLayer.Width;
+            float verticalScale = Height / (float)_resizePreviewLayer.Height;
+            float scale = _cacheDpi / 96f;
+            state = graphics.Save();
+            graphics.ScaleTransform(horizontalScale, verticalScale);
+            GraphicsState mapState = graphics.Save();
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.SetClip(_mapBounds, CombineMode.Intersect);
+            if (_routeMode)
+            {
+                DrawRouteHops(graphics, scale);
+                if (_routeCurve.HasValue) DrawTrafficCurve(graphics, scale, _routeCurve.Value);
+                PointF? start = ProjectRoutePoint(_routeSourcePosition), end = ProjectRoutePoint(_routeDestinationPosition);
+                if (start.HasValue) DrawRouteEndpoint(graphics, scale, start.Value, _routeSource, "起点", UploadColor, true);
+                if (end.HasValue) DrawRouteEndpoint(graphics, scale, end.Value, _routeDestination, "终点", DownloadColor, false);
+            }
+            else
+            {
+                for (int i = _markers.Count - 1; i >= 0; i--) DrawMarker(graphics, _markers[i], i, scale);
+            }
+            graphics.Restore(mapState);
+            graphics.Restore(state);
+            if (_routeMode) DrawRouteLegend(graphics, graphics.DpiX / 96f);
+            else
+            {
+                DrawHeading(graphics, graphics.DpiX / 96f);
+                DrawFooter(graphics, graphics.DpiX / 96f);
+            }
+        }
+
+        private void BuildResizePreviewLayer()
+        {
+            int width = _cachedLayerSize.Width, height = _cachedLayerSize.Height;
+            if (_baseLayer == null || width <= 0 || height <= 0) return;
+            Bitmap preview = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+            preview.SetResolution(_cacheDpi, _cacheDpi);
+            try
+            {
+                using (Graphics previewGraphics = Graphics.FromImage(preview))
+                {
+                    using (Brush brush = new SolidBrush(BackColor))
+                        previewGraphics.FillRectangle(brush, 0, 0, width, height);
+                    previewGraphics.DrawImageUnscaled(_baseLayer, 0, 0);
+                    if (!_routeMode) DrawActiveCountries(previewGraphics, _cacheDpi / 96f);
+                }
+                ClearResizePreviewLayer();
+                _resizePreviewLayer = preview;
+                preview = null;
+                _resizePreviewBuildCount++;
+            }
+            finally
+            {
+                if (preview != null) preview.Dispose();
+            }
+        }
+
+        private void DrawActiveCountries(Graphics graphics, float scale)
+        {
             GraphicsState state = graphics.Save();
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             graphics.SetClip(_mapBounds, CombineMode.Intersect);
@@ -241,19 +366,19 @@ namespace RouteLens
                 ProjectedCountry country;
                 if (!_byCode.TryGetValue(countryStat.Code, out country) || !IsMapPosition(country.Source.Longitude, country.Source.Latitude)) continue;
                 bool selected = countryStat.Code == _selectedCode;
-                using (Brush brush = new SolidBrush(selected ? SelectedLandColor : ActiveLandColor)) graphics.FillPath(brush, country.Path);
+                using (Brush brush = new SolidBrush(selected ? SelectedLandColor : ActiveLandColor))
+                    graphics.FillPath(brush, country.Path);
                 using (Pen pen = new Pen(Color.FromArgb(selected ? 255 : 135, UiPalette.Accent), Math.Max(.65f, .7f * scale)))
                     graphics.DrawPath(pen, country.Path);
             }
             graphics.Restore(state);
-            graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            // Draw the least prominent marks first so the largest country counts stay legible.
-            state = graphics.Save();
-            graphics.SetClip(_mapBounds, CombineMode.Intersect);
-            for (int i = _markers.Count - 1; i >= 0; i--) DrawMarker(graphics, _markers[i], i, scale);
-            graphics.Restore(state);
-            DrawHeading(graphics, scale);
-            DrawFooter(graphics, scale);
+        }
+
+        private void ClearResizePreviewLayer()
+        {
+            if (_resizePreviewLayer == null) return;
+            _resizePreviewLayer.Dispose();
+            _resizePreviewLayer = null;
         }
 
         private void DrawHeading(Graphics graphics, float scale)
@@ -264,7 +389,7 @@ namespace RouteLens
             DrawText(graphics, "世界连接地图", _titleFont, new Rectangle(inset + S(27, scale), titleY, S(140, scale), S(22, scale)), UiPalette.Ink, TextFormatFlags.Left);
             string status = _zoom > 1f ? _countries.Count.ToString("N0") + " 个地区 · 视野内 " + _markers.Count.ToString("N0") : _countries.Count.ToString("N0") + " 个国家 / 地区";
             int statusWidth = S(_zoom > 1f ? 205 : 135, scale);
-            int expandWidth = _showExpandButton ? S(115, scale) : 0;
+            int expandWidth = (_showExpandButton ? S(115, scale) : 0) + (_showTrafficDemoButton ? S(220, scale) : 0);
             int statusRight = Width - inset - expandWidth;
             if (statusRight - statusWidth >= inset + S(175, scale))
                 DrawText(graphics, status, _bodyFont, new Rectangle(statusRight - statusWidth, titleY + S(1, scale), statusWidth, S(21, scale)), UiPalette.Muted, TextFormatFlags.Right);
@@ -289,6 +414,26 @@ namespace RouteLens
         {
             base.OnResize(e);
             LayoutExpandButton();
+            if (_baseLayer == null || !IsHandleCreated) return;
+            if (Width == _cachedLayerSize.Width && Height == _cachedLayerSize.Height) return;
+            if (!Visible)
+            {
+                _resizeSettleTimer.Stop();
+                _resizePreview = false;
+                ClearResizePreviewLayer();
+                ClearProjection();
+                UpdateRouteTimer();
+                return;
+            }
+            bool wasPreview = _resizePreview;
+            _resizePreview = true;
+            if (!wasPreview)
+            {
+                StopRouteTimer();
+            }
+            _resizeSettleTimer.Stop();
+            _resizeSettleTimer.Start();
+            Invalidate();
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -303,6 +448,7 @@ namespace RouteLens
             if (_expandButton == null) return;
             float scale = IsHandleCreated ? DeviceDpiScale() : 1f;
             _expandButton.Bounds = new Rectangle(Math.Max(0, Width - S(126, scale)), S(7, scale), S(110, scale), S(32, scale));
+            _trafficDemoButton.Bounds = new Rectangle(Math.Max(0, Width - S(239, scale)), S(7, scale), S(105, scale), S(32, scale));
         }
 
         private float DeviceDpiScale()
@@ -357,9 +503,14 @@ namespace RouteLens
 
         private void EnsureProjection(float dpiX, float dpiY)
         {
+            // Window drags often produce dozens of intermediate sizes. Reuse the
+            // last complete vector and bitmap cache until the resize settles.
+            if (_resizePreview && _baseLayer != null &&
+                Math.Abs(_cacheDpi - dpiX) <= .1f && _cacheDark == UiPalette.IsDark) return;
             if (_baseLayer == null || _baseLayer.Width != Math.Max(1, Width) || _baseLayer.Height != Math.Max(1, Height) ||
                 Math.Abs(_cacheDpi - dpiX) > .1f || _cacheDark != UiPalette.IsDark)
             {
+                Stopwatch buildTime = Stopwatch.StartNew();
                 ClearProjection();
                 _cacheDpi = dpiX;
                 _cacheDark = UiPalette.IsDark;
@@ -379,6 +530,7 @@ namespace RouteLens
                 }
                 _baseLayer = new Bitmap(Math.Max(1, Width), Math.Max(1, Height), PixelFormat.Format32bppPArgb);
                 _baseLayer.SetResolution(dpiX, dpiY);
+                _cachedLayerSize = new Size(_baseLayer.Width, _baseLayer.Height);
                 using (Graphics graphics = Graphics.FromImage(_baseLayer))
                 {
                     using (Brush brush = new SolidBrush(BackColor)) graphics.FillRectangle(brush, 0, 0, _baseLayer.Width, _baseLayer.Height);
@@ -401,6 +553,9 @@ namespace RouteLens
                 }
                 _markersDirty = true;
                 _routeGeometryDirty = true;
+                _baseLayerBuildCount++;
+                buildTime.Stop();
+                _lastBaseLayerBuildMilliseconds = buildTime.ElapsedMilliseconds;
             }
             if (_markersDirty && !_routeMode) BuildMarkers(dpiX / 96f);
         }
@@ -511,7 +666,7 @@ namespace RouteLens
 
         private int HitTest(Point point)
         {
-            if (_routeMode || !_mapBounds.Contains(point)) return -1;
+            if (_resizePreview || _routeMode || !_mapBounds.Contains(point)) return -1;
             int closest = -1;
             float closestDistance = Single.MaxValue;
             float scale = _cacheDpi > 0 ? _cacheDpi / 96f : 1f;
@@ -680,6 +835,12 @@ namespace RouteLens
         protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
         protected override void OnBackColorChanged(EventArgs e) { base.OnBackColorChanged(e); ClearProjection(); Invalidate(); }
 
+        internal bool IsResizePreview { get { return _resizePreview; } }
+        internal int BaseLayerBuildCount { get { return _baseLayerBuildCount; } }
+        internal int ResizePreviewBuildCount { get { return _resizePreviewBuildCount; } }
+        internal long LastBaseLayerBuildMilliseconds { get { return _lastBaseLayerBuildMilliseconds; } }
+        internal RectangleF MapBoundsForChecks { get { return _mapBounds; } }
+
         private void UpdateAccessibility()
         {
             if (_routeMode) { UpdateRouteAccessibility(); return; }
@@ -691,6 +852,7 @@ namespace RouteLens
 
         private void ClearProjection()
         {
+            ClearResizePreviewLayer();
             if (_baseLayer != null) { _baseLayer.Dispose(); _baseLayer = null; }
             foreach (ProjectedCountry country in _projected) country.Dispose();
             _projected.Clear();
@@ -775,8 +937,12 @@ namespace RouteLens
         {
             if (disposing)
             {
+                _resizeSettleTimer.Stop();
+                _resizeSettleTimer.Dispose();
+                ClearResizePreviewLayer();
                 ClearProjection();
                 _routeTimer.Dispose();
+                _demoTimer.Dispose();
                 _tips.Dispose();
                 _titleFont.Dispose();
                 _bodyFont.Dispose();
