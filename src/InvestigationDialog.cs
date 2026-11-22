@@ -73,7 +73,7 @@ namespace RouteLens
             filters.ColumnStyles.Clear(); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 46)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             filters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
             filters.Controls.Add(Label("搜索", 9, UiPalette.Muted), 0, 0);
-            _search = new TextBox { Dock = DockStyle.Fill, Margin = new Padding(0, 5, 10, 4), AccessibleName = "搜索调查记录的程序、路径或目标", MaxLength = 256 };
+            _search = new TextBox { BackColor = UiPalette.Surface, ForeColor = UiPalette.Ink, Dock = DockStyle.Fill, Margin = new Padding(0, 5, 10, 4), AccessibleName = "搜索调查记录的程序、路径或目标", MaxLength = 256 };
             _filter = Combo("按复核状态筛选"); _filter.Items.Add("全部复核状态"); _filter.Items.AddRange(ReviewLabels); _filter.SelectedIndex = 0;
             _count = Label("0 条记录", 9, UiPalette.Muted); _count.TextAlign = ContentAlignment.MiddleRight;
             filters.Controls.Add(_search, 1, 0); filters.Controls.Add(_filter, 2, 0); filters.Controls.Add(_count, 3, 0); layout.Controls.Add(filters, 0, 4);
@@ -95,9 +95,33 @@ namespace RouteLens
             _empty.Padding = new Padding(18); _empty.BackColor = UiPalette.Surface;
             listCard.Controls.Add(_grid); listCard.Controls.Add(_empty); workspace.Controls.Add(listCard, 0, 0);
 
-            TabControl details = new TabControl { Dock = DockStyle.Fill, Margin = new Padding(0), AccessibleName = "调查记录详情" };
-            TabPage observation = Page("观察详情"), targets = Page("目标与链路"), review = Page("复核记录");
-            details.TabPages.AddRange(new[] { observation, targets, review });
+            TableLayoutPanel details = Table(1, 2); details.Margin = new Padding(0); details.AccessibleName = "调查记录详情";
+            details.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); details.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            FlowLayoutPanel detailNavigation = Flow(); detailNavigation.WrapContents = false;
+            string[] detailNames = { "观察详情", "目标与链路", "复核记录" };
+            Panel[] detailPages = { Page(), Page(), Page() };
+            ModernButton[] detailButtons = new ModernButton[detailNames.Length];
+            Panel detailContent = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
+            for (int i = 0; i < detailNames.Length; i++)
+            {
+                int selectedPage = i;
+                detailButtons[i] = (ModernButton)Button(detailNames[i], 112); detailButtons[i].Height = 32;
+                detailButtons[i].Click += delegate
+                {
+                    for (int j = 0; j < detailPages.Length; j++)
+                    {
+                        detailPages[j].Visible = j == selectedPage;
+                        detailButtons[j].Primary = j == selectedPage;
+                    }
+                    detailPages[selectedPage].BringToFront();
+                };
+                detailNavigation.Controls.Add(detailButtons[i]);
+            }
+            detailButtons[0].Primary = true;
+            foreach (Panel page in detailPages) { page.Dock = DockStyle.Fill; page.Visible = false; detailContent.Controls.Add(page); }
+            detailPages[0].Visible = true;
+            details.Controls.Add(detailNavigation, 0, 0); details.Controls.Add(detailContent, 0, 1);
+            Panel observation = detailPages[0], targets = detailPages[1], review = detailPages[2];
             TableLayoutPanel factLayout = Table(1, 2); factLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 122)); factLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             _trend = new InvestigationTrend { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 6), AccessibleName = "Clash 内层上传速率采样趋势" };
             _facts = ReadBox("所选调查记录的事实和局限"); factLayout.Controls.Add(_trend, 0, 0); factLayout.Controls.Add(_facts, 0, 1); observation.Controls.Add(factLayout);
@@ -108,7 +132,7 @@ namespace RouteLens
             reviewLayout.Controls.Add(Label("复核只记录你的调查进展，不改变证据结论。", 9, UiPalette.Muted), 0, 0);
             _review = Combo("调查记录的人工复核状态"); _review.Items.AddRange(ReviewLabels); _review.SelectedIndex = 0; reviewLayout.Controls.Add(_review, 0, 1);
             reviewLayout.Controls.Add(Label("备注（最多 4,000 字；默认不导出）", 9, UiPalette.Muted), 0, 2);
-            _note = new TextBox { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical, MaxLength = 4000, Margin = new Padding(0), AccessibleName = "人工复核备注" };
+            _note = new TextBox { BackColor = UiPalette.Surface, ForeColor = UiPalette.Ink, Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical, MaxLength = 4000, Margin = new Padding(0), AccessibleName = "人工复核备注" };
             reviewLayout.Controls.Add(_note, 0, 3);
             _save = Button("保存复核", 110); _save.Margin = new Padding(0, 8, 0, 0); _save.Click += delegate { SaveReview(); }; reviewLayout.Controls.Add(_save, 0, 4); review.Controls.Add(reviewLayout);
             workspace.Controls.Add(details, 1, 0); layout.Controls.Add(workspace, 0, 5);
@@ -353,11 +377,11 @@ namespace RouteLens
         private static Label InlineLabel(string text, int width) { Label label = Label(text, 9, UiPalette.Muted); label.Dock = DockStyle.None; label.Size = new Size(width, 30); return label; }
         private static CheckBox Check(string text, int width) { return new ModernCheck { Text = text, Width = width, Height = 30, Margin = new Padding(0, 0, 5, 0), AccessibleName = text }; }
         private static Button Button(string text, int width) { return new ModernButton { Text = text, Width = width, Height = 34, Margin = new Padding(0, 0, 8, 0), AccessibleName = text }; }
-        private static NumericUpDown Number(decimal minimum, decimal maximum, int decimals, int width, string name) { return new NumericUpDown { Minimum = minimum, Maximum = maximum, DecimalPlaces = decimals, Increment = decimals > 0 ? .1m : 1m, Width = width, Margin = new Padding(0, 3, 7, 0), AccessibleName = name }; }
+        private static NumericUpDown Number(decimal minimum, decimal maximum, int decimals, int width, string name) { return new NumericUpDown { BackColor = UiPalette.Surface, ForeColor = UiPalette.Ink, Minimum = minimum, Maximum = maximum, DecimalPlaces = decimals, Increment = decimals > 0 ? .1m : 1m, Width = width, Margin = new Padding(0, 3, 7, 0), AccessibleName = name }; }
         private static decimal Clamp(decimal value, NumericUpDown input) { return Math.Max(input.Minimum, Math.Min(input.Maximum, value)); }
-        private static ComboBox Combo(string name) { return new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 4, 0, 5), AccessibleName = name }; }
+        private static ComboBox Combo(string name) { return new ModernCombo { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 4, 0, 5), AccessibleName = name }; }
         private static TextBox ReadBox(string name) { return new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = true, BorderStyle = BorderStyle.None, BackColor = UiPalette.Surface, ForeColor = UiPalette.Ink, Font = UiPalette.Body(9), AccessibleName = name, Margin = new Padding(0) }; }
-        private static TabPage Page(string text) { return new TabPage(text) { BackColor = UiPalette.Surface, Padding = new Padding(12) }; }
+    private static Panel Page() { return new Panel { BackColor = UiPalette.Surface, Padding = new Padding(12), Margin = new Padding(0) }; }
         private void AddColumn(string header, float weight, int minimum) { _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = header, FillWeight = weight, MinimumWidth = minimum, SortMode = DataGridViewColumnSortMode.NotSortable }); }
         private static string ReviewText(string value) { int index = Array.IndexOf(ReviewKeys, value); return index < 0 ? "待核查" : ReviewLabels[index]; }
         private static bool Contains(string value, string query) { return value != null && value.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0; }

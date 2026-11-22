@@ -12,13 +12,13 @@ using System.Web.Script.Serialization;
 namespace RouteLens
 {
     // Read-only local controller client. No controller settings or VPN rules are changed.
-    public sealed class ClashConnectionReader : IDisposable
+    public sealed partial class ClashConnectionReader : IDisposable
     {
         private const int MaximumBody = 8 * 1024 * 1024;
         private const int IoTimeout = 2200;
         private readonly object _gate = new object();
         private List<Endpoint> _configured = new List<Endpoint>();
-        private Endpoint _active;
+        private volatile Endpoint _active;
         private DateTime _discoverAfter = DateTime.MinValue;
         private volatile bool _disposed;
 
@@ -315,7 +315,7 @@ namespace RouteLens
 
         private static string Get(Endpoint endpoint, string path)
         {
-            if (path != "/connections" && path != "/version") throw new InvalidOperationException("Read-only endpoint");
+            if (path != "/connections" && path != "/version" && path != "/providers/proxies") throw new InvalidOperationException("Read-only endpoint");
             if (endpoint.PipeName != null)
             {
                 using (NamedPipeClientStream pipe = new NamedPipeClientStream(".", endpoint.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
@@ -528,6 +528,7 @@ namespace RouteLens
                     ProcessPath = processPath, ProcessId = 0,
                     ProcessAttribution = systemMarker ? "Mihomo 系统进程标记（PID 未提供）" : (process.Length == 0 ? "内核未提供进程信息" : "Mihomo 进程元数据（PID 未提供）"),
                     Host = host, ProxyChain = String.Join(" → ", chains.ToArray()),
+                    OutboundAddress = Text(metadata, "remoteDestination", 255), TerminalAdapter = terminal,
                     RouteType = terminal == "DIRECT" ? "直连" : (terminal == "REJECT" || terminal == "REJECT-DROP" ? "拒绝" : (terminal.Length == 0 ? "未知" : "代理")),
                     Rule = Text(item, "rule", 160), RulePayload = Text(item, "rulePayload", 2048),
                     DataSource = "Clash / Mihomo", Inbound = InboundText(metadata),

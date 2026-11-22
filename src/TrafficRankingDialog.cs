@@ -111,7 +111,7 @@ namespace RouteLens
             toolbar.Controls.Add(targets, 1, 0);
             toolbar.Controls.Add(interfaces, 2, 0);
             toolbar.Controls.Add(TextLabel("排序", 9, UiPalette.Muted), 3, 0);
-            _sort = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Font = UiPalette.Body(9.5f), Margin = new Padding(0, 7, 0, 7), AccessibleName = "流量排行排序方式" };
+            _sort = new ModernCombo { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, Font = UiPalette.Body(9.5f), Margin = new Padding(0, 7, 0, 7), AccessibleName = "流量排行排序方式" };
             _sort.Items.AddRange(new object[] { "下载速度", "上传速度", "总速度" });
             _sort.SelectedIndex = 0;
             _sort.SelectedIndexChanged += delegate
@@ -135,7 +135,7 @@ namespace RouteLens
                 RowHeadersVisible = false, AutoGenerateColumns = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
                 ColumnHeadersHeight = 38, ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
                 CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal, ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None,
-                GridColor = Color.FromArgb(238, 241, 243), EnableHeadersVisualStyles = false, AccessibleName = "按程序汇总的实时上传与下载流量" };
+                GridColor = UiPalette.Border, EnableHeadersVisualStyles = false, AccessibleName = "按程序汇总的实时上传与下载流量" };
             _grid.RowTemplate.Height = 40;
             _grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = UiPalette.Raised, ForeColor = UiPalette.Muted, Font = UiPalette.Body(8.8f), SelectionBackColor = UiPalette.Raised, SelectionForeColor = UiPalette.Ink, Padding = new Padding(9, 0, 0, 0) };
             _grid.DefaultCellStyle = new DataGridViewCellStyle { BackColor = UiPalette.Surface, ForeColor = UiPalette.Ink, SelectionBackColor = UiPalette.AccentSoft, SelectionForeColor = UiPalette.Ink, Font = UiPalette.Body(9.5f), Padding = new Padding(9, 0, 0, 0), NullValue = "—", WrapMode = DataGridViewTriState.False };

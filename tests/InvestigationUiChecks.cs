@@ -64,7 +64,10 @@ internal static class InvestigationUiChecks
                     monitor.Configure(true, 1048576, 2);
                     Field<TextBox>(main, "_search").Text = "not-a-match";
                     for (int i = 0; i <= 4; i++) main.SetSnapshotForTest(Snapshot(i));
-                    Check(monitor.Snapshot().Length == 1, "MainForm did not feed unfiltered samples into investigation");
+                    TrafficReport sampled = Field<TrafficTracker>(main, "_traffic").Build(Snapshot(4).Connections, false);
+                    Check(monitor.Snapshot().Length == 1, "MainForm did not feed unfiltered samples into investigation. State=" + monitor.State +
+                        "; available=" + sampled.Available + "; fresh=" + sampled.Fresh + "; measured=" + sampled.MeasuredConnectionCount +
+                        "; rate=" + (sampled.Programs.Count == 0 ? "none" : sampled.Programs[0].UploadPerSecond.ToString("0.##")));
                     Check(Field<EvidenceMonitor>(main, "_evidence").Snapshot().Any(e => e.Source == "行为调查"), "Evidence monitor missed investigation");
                     Field<TextBox>(main, "_search").Clear(); main.Size = new Size(1040, 720); Application.DoEvents();
                     Check(Button(main, "行为调查").Parent.ClientRectangle.Contains(Button(main, "行为调查").Bounds), "Navigation clipped at minimum size");

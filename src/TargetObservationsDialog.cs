@@ -37,7 +37,7 @@ namespace RouteLens
             Label note = Label("仅记录窗口打开期间按当时筛选观察到的目标，最多保留 5 分钟和 200 项，关闭后清除。\r\n上传依据 Clash 两次连续计数的正增量；程序为内核提供的分组，短连接可能遗漏。", 9, UiPalette.Muted);
             note.AutoEllipsis = false; layout.Controls.Add(note, 0, 1);
             FlowLayoutPanel choices = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = new Padding(0), BackColor = UiPalette.Canvas };
-            _view = new ComboBox { Width = 220, Height = 32, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Margin = new Padding(0, 3, 16, 0), AccessibleName = "目标观察分类" };
+            _view = new ModernCombo { Width = 220, Height = 32, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 3, 16, 0), AccessibleName = "目标观察分类" };
             _view.Items.AddRange(new object[] { "最近活动目标", "最近有上传增量的目标" }); _view.SelectedIndex = 0;
             _status = new Label { AutoSize = false, Width = 350, Height = 34, TextAlign = ContentAlignment.MiddleLeft, ForeColor = UiPalette.Muted, Font = UiPalette.Body(9) };
             choices.Controls.Add(_view); choices.Controls.Add(_status); layout.Controls.Add(choices, 0, 2);
@@ -47,7 +47,7 @@ namespace RouteLens
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
                 EnableHeadersVisualStyles = false, ColumnHeadersHeight = 38, ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
                 CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal, ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None,
-                GridColor = Color.FromArgb(238, 241, 243), AccessibleName = "最近目标观察列表" };
+                GridColor = UiPalette.Border, AccessibleName = "最近目标观察列表" };
             _grid.RowTemplate.Height = 38;
             _grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = UiPalette.Raised, ForeColor = UiPalette.Muted, Font = UiPalette.Body(8.8f), SelectionBackColor = UiPalette.Raised, SelectionForeColor = UiPalette.Ink, Padding = new Padding(8, 0, 0, 0) };
             _grid.DefaultCellStyle = new DataGridViewCellStyle { BackColor = UiPalette.Surface, ForeColor = UiPalette.Ink, SelectionBackColor = UiPalette.AccentSoft, SelectionForeColor = UiPalette.Ink, Font = UiPalette.Body(9), Padding = new Padding(8, 0, 0, 0), NullValue = "—" };

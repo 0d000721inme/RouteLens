@@ -40,6 +40,30 @@ namespace RouteLens
         private readonly CountryRankList _programs, _domains;
         private bool _syncing, _shown;
         private string _selectedCode;
+        private ConnectionPathView _pathView;
+
+        internal void PinConnection(ConnectionInfo item, NetworkSnapshot snapshot, Func<NetworkSnapshot> current,
+            Func<ConnectionInfo, TrafficReport> rates, Func<string, GeoResult> lookup, Func<bool> paused)
+        {
+            if (_pathView == null)
+            {
+                _pathView = new ConnectionPathView(current, rates, lookup, paused, ShowDistribution);
+                Controls.Add(_pathView);
+                _pathView.BackColor = UiPalette.Canvas;
+            }
+            _pathView.Pin(item, snapshot); _pathView.Show(); _pathView.BringToFront();
+        }
+
+        internal void ShowDistribution()
+        {
+            if (_pathView == null) return;
+            _pathView.ClearPin(); _pathView.Hide(); RefreshSnapshot();
+        }
+
+        internal void RefreshPath()
+        {
+            if (_pathView != null && _pathView.Visible) _pathView.UpdateView();
+        }
 
         public MapExplorerDialog(Func<MapExplorerSnapshot> provider, Action<string> selectCountry)
         {
@@ -105,7 +129,7 @@ namespace RouteLens
             detailScroll.Controls.Add(detail);
 
             Label detailTitle = MakeLabel("国家详情", 10.5f, UiPalette.Ink); detail.Controls.Add(detailTitle, 0, 0);
-            _countryPicker = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList,
+            _countryPicker = new ModernCombo { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = UiPalette.Body(9.5f), Margin = new Padding(0, 0, 0, 7), AccessibleName = "选择国家或查看全部国家", IntegralHeight = true, MaxDropDownItems = 14 };
             _countryPicker.SelectedIndexChanged += delegate
             {
@@ -199,6 +223,7 @@ namespace RouteLens
         private void RefreshSnapshot()
         {
             if (IsDisposed || Disposing) return;
+            if (_pathView != null && _pathView.Visible) return;
             MapExplorerSnapshot snapshot;
             try { snapshot = _provider() ?? new MapExplorerSnapshot(); }
             catch

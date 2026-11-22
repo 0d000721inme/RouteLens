@@ -39,7 +39,7 @@ namespace RouteLens
                 BorderStyle = BorderStyle.None, BackColor = UiPalette.Raised, ForeColor = UiPalette.Ink, Font = UiPalette.Body(9.5f),
                 WordWrap = true, AccessibleName = "DNS 监测依据、网卡和本次内存记录" };
             Panel bottom = new Panel { Dock = DockStyle.Bottom, Height = 95 };
-            CheckBox notify = new CheckBox { Text = "发现疑似风险时显示系统通知", Checked = notificationsEnabled(),
+            ModernCheck notify = new ModernCheck { Text = "发现疑似风险时显示系统通知", Checked = notificationsEnabled(),
                 Bounds = new Rectangle(0, 8, 310, 30), AutoSize = false, ForeColor = UiPalette.Ink };
             notify.CheckedChanged += delegate { setNotificationsEnabled(notify.Checked); };
             bottom.Controls.Add(notify);
@@ -93,7 +93,7 @@ namespace RouteLens
 
         public static Color StatusColor(string state)
         {
-            if (state == "warning") return Color.FromArgb(167, 62, 49);
+            if (state == "warning") return UiPalette.Danger;
             if (state == "limited" || state == "observed") return UiPalette.Warn;
             if (state == "monitoring") return UiPalette.Accent;
             return UiPalette.Muted;

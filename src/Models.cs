@@ -19,6 +19,8 @@ namespace RouteLens
         public string ProcessPath { get; set; }
         public string ProcessAttribution { get; set; }
         public string ProxyChain { get; set; }
+        public string OutboundAddress { get; set; }
+        public string TerminalAdapter { get; set; }
         public string RouteType { get; set; }
         public string Rule { get; set; }
         public string RulePayload { get; set; }
@@ -27,6 +29,21 @@ namespace RouteLens
         public long UploadBytes { get; set; }
         public long DownloadBytes { get; set; }
         public bool? HasTrafficCounters { get; set; }
+    }
+
+    public sealed class SubscriptionQuota
+    {
+        public string Id { get; internal set; }
+        public string Name { get; internal set; }
+        public string Source { get; internal set; }
+        public bool IsCurrent { get; internal set; }
+        public long UploadBytes { get; internal set; }
+        public long DownloadBytes { get; internal set; }
+        public long UsedBytes { get { return UploadBytes + DownloadBytes; } }
+        public long TotalBytes { get; internal set; }
+        public long RemainingBytes { get { return Math.Max(0, TotalBytes - UsedBytes); } }
+        public DateTime? UpdatedAtUtc { get; internal set; }
+        public DateTime? ExpiresAtUtc { get; internal set; }
     }
 
     public sealed class NetworkSnapshot

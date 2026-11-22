@@ -12,7 +12,11 @@ internal static class TrafficTrackerChecksV6
     private static void Check(bool condition, string description)
     {
         checks++;
-        if (!condition) throw new Exception("FAILED: " + description);
+        if (!condition)
+        {
+            Console.Error.WriteLine("FAILED after " + checks + " checks: " + description);
+            throw new Exception("FAILED: " + description);
+        }
     }
     private static void Near(double actual, double expected, string description)
     {
@@ -36,6 +40,75 @@ internal static class TrafficTrackerChecksV6
         tracker.Update(snapshot);
         return tracker.Build(snapshot.Connections, false);
     }
+
+    private static ConnectionInfo Site(string id, string host, string route, long down, long up)
+    {
+        ConnectionInfo row = Row(id, down, up); row.Host = host; row.RouteType = route;
+        return row;
+    }
+
+    private static void DailySites()
+    {
+        TrafficTracker tracker = new TrafficTracker();
+        DailySiteTraffic daily = new DailySiteTraffic();
+        Action<int, ConnectionInfo[]> sample = delegate(int second, ConnectionInfo[] rows) { tracker.Update(Snapshot(second, rows), daily); };
+        sample(0, new[] { Site("a", "One.test", "直连", 1000, 100), Site("b", "one.test.", "代理", 700, 80), Site("c", "", "拒绝", 20, 1) });
+        Check(daily.Read(At).Sites.Count == 0, "baseline does not count old traffic");
+        sample(1, new[] { Site("a", "One.test", "直连", 1060, 110), Site("b", "one.test.", "代理", 730, 85), Site("c", "", "拒绝", 23, 2) });
+        DailySiteTrafficReport first = daily.Read(At);
+        Check(first.DownloadBytes == 93 && first.UploadBytes == 16 && first.TotalBytes == 109 &&
+            first.DirectBytes == 70 && first.ProxyBytes == 35 && first.UnknownBytes == 4, "day partitions actual bytes by route");
+        Check(first.Sites.Count == 2 && first.Sites[0].TotalBytes == 105 && first.Sites[0].DownloadBytes == 90 &&
+            first.Sites[0].UploadBytes == 15 && first.Sites[0].DirectBytes == 70 && first.Sites[0].ProxyBytes == 35 &&
+            first.Sites[1].Host == "198.51.100.1", "site grouping, IP fallback, ranked totals");
+        Check(daily.Read(At, false).Sites.Count == 0 && daily.Read(At, false).TotalBytes == 109, "cheap summary keeps exact totals");
+        sample(1, new[] { Site("a", "One.test", "直连", 1, 1) });
+        sample(0, new[] { Site("a", "One.test", "直连", 0, 0) });
+        sample(2, new[] { Site("a", "One.test", "代理", 1070, 110), Site("new", "new.test", "直连", 6000, 900) });
+        Check(daily.Read(At).TotalBytes == 119 && daily.Read(At).UnknownBytes == 14, "replay/old sample do not replace baseline; changed route is unknown");
+        sample(3, new[] { Site("a", "One.test", "代理", 1080, 110), Site("a", "One.test", "代理", 1090, 110) });
+        sample(4, new[] { Site("a", "One.test", "代理", 1200, 130) });
+        ConnectionInfo missing = Site("a", "One.test", "代理", 1300, 140); missing.HasTrafficCounters = false;
+        sample(5, new[] { missing });
+        sample(6, new[] { Site("a", "One.test", "代理", 1400, 150) });
+        sample(7, new[] { Site("a", "One.test", "代理", 5, 0) });
+        tracker.Reset();
+        sample(8, new[] { Site("a", "One.test", "代理", 1500, 160) });
+        sample(20, new[] { Site("a", "One.test", "代理", 1600, 170) });
+        Check(daily.Read(At).TotalBytes == 119, "ambiguous IDs, missing/reset counters, pause and gaps do not invent bytes");
+        sample(21, new[] { Site("a", "One.test", "代理", 1604, 171) });
+        sample(22, new ConnectionInfo[0]);
+        Check(daily.Read(At).TotalBytes == 124 && first.TotalBytes == 109, "closed sites retained, detached reports stable");
+        daily.Clear();
+        sample(23, new[] { Site("a", "One.test", "代理", 150, 40) });
+        daily.Clear();
+        sample(24, new[] { Site("a", "One.test", "代理", 250, 45) });
+        Check(daily.Read(At).TotalBytes == 0, "clear drops old interval");
+        sample(25, new[] { Site("a", "One.test", "代理", 251, 46) });
+        Check(daily.Read(At).TotalBytes == 2 && daily.Read(At).Sites.Count == 1, "clear starts fresh after next baseline");
+        sample(86399, new[] { Site("a", "One.test", "代理", 800, 90) });
+        Check(daily.Read(At.AddDays(1)).TotalBytes == 0, "day resets on read even with sampling paused");
+        sample(86400, new[] { Site("a", "One.test", "代理", 820, 92) });
+        sample(86399, new[] { Site("a", "One.test", "代理", 1, 0) });
+        sample(86401, new[] { Site("a", "One.test", "代理", 826, 95) });
+        Check(daily.Read(At.AddDays(1)).Day == At.AddDays(1) && daily.Read(At.AddDays(1)).TotalBytes == 9,
+            "midnight straddling interval excluded; late yesterday packet ignored");
+        NetworkSnapshot native = Snapshot(86402, Site("a", "One.test", "代理", 1000, 150)); native.ClashConnected = false;
+        tracker.Update(native, daily);
+        sample(86403, new[] { Site("a", "One.test", "代理", 1200, 155) });
+        NetworkSnapshot other = Snapshot(86404, Site("a", "One.test", "代理", 1600, 185)); other.ControllerSummary = "another controller";
+        tracker.Update(other, daily);
+        Check(daily.Read(At.AddDays(1)).TotalBytes == 9, "source and controller changes do not invent bytes");
+
+        DailySiteTraffic bounded = new DailySiteTraffic(); bounded.Read(At);
+        for (int i = 0; i <= DailySiteTraffic.MaximumSites; i++) bounded.Add(Site("i", "h" + i + ".test", "直连", 0, 0), 1, 2, "直连");
+        DailySiteTrafficReport limited = bounded.Read(At);
+        Check(limited.Sites.Count == DailySiteTraffic.MaximumSites && limited.OverflowBytes == 3 && limited.DirectBytes == 3L * (DailySiteTraffic.MaximumSites + 1),
+            "site capacity keeps exact route totals and tracks grouped overflow");
+        bounded.Add(Site("i", "h0.test", "代理", 0, 0), Int64.MaxValue, Int64.MaxValue, "代理");
+        Check(bounded.Read(At).TotalBytes == Int64.MaxValue && bounded.Read(At).Sites[0].TotalBytes == Int64.MaxValue, "daily totals saturate without wrapping");
+    }
+
     private static void Main()
     {
         TrafficTracker tracker = new TrafficTracker();
@@ -170,6 +243,7 @@ internal static class TrafficTrackerChecksV6
         ConnectionInfo changedHost = Row("target-a", 300, 250); changedHost.Host = "other.example";
         report = Accept(tracker, Snapshot(42, changedHost));
         Check(!report.Measuring && !report.Targets[0].PositiveUpload, "changed host cannot inherit earlier target's upload delta");
+        DailySites();
         Console.WriteLine("Traffic tracker passed " + checks + " checks.");
     }
 }

@@ -13,9 +13,9 @@ using System.Windows.Forms;
 
 namespace RouteLens
 {
-    // This is a country-level view. Its dots are representative country positions,
-    // never inferred coordinates of the remote IP, VPN node, or local computer.
-    public sealed class WorldMapControl : Control
+    // Distribution markers use country representative positions. Route endpoints
+    // can also use explicit coordinates supplied by the caller.
+    public sealed partial class WorldMapControl : Control
     {
         private sealed class MapCountry
         {
@@ -44,12 +44,12 @@ namespace RouteLens
 
         private static readonly object MapGate = new object();
         private static Dictionary<string, MapCountry> SharedMap;
-        private static readonly Color LandColor = Color.FromArgb(238, 244, 250);
-        private static readonly Color CoastColor = Color.FromArgb(199, 215, 230);
-        private static readonly Color GridColor = Color.FromArgb(239, 244, 249);
-        private static readonly Color ActiveLandColor = Color.FromArgb(204, 225, 247);
-        private static readonly Color SelectedLandColor = Color.FromArgb(165, 204, 242);
-        private static readonly Color QuietTextColor = Color.FromArgb(91, 106, 127);
+        private static Color LandColor { get { return UiPalette.IsDark ? Color.FromArgb(46, 57, 63) : Color.FromArgb(238, 244, 250); } }
+        private static Color CoastColor { get { return UiPalette.IsDark ? Color.FromArgb(80, 98, 110) : Color.FromArgb(199, 215, 230); } }
+        private static Color GridColor { get { return UiPalette.IsDark ? Color.FromArgb(39, 46, 52) : Color.FromArgb(239, 244, 249); } }
+        private static Color ActiveLandColor { get { return UiPalette.IsDark ? Color.FromArgb(49, 76, 103) : Color.FromArgb(204, 225, 247); } }
+        private static Color SelectedLandColor { get { return UiPalette.IsDark ? Color.FromArgb(60, 100, 139) : Color.FromArgb(165, 204, 242); } }
+        private static Color QuietTextColor { get { return UiPalette.Muted; } }
         private const float North = 85f;
         private const float South = -60f;
         private readonly Font _titleFont = UiPalette.Body(10f);
@@ -64,6 +64,7 @@ namespace RouteLens
         private Bitmap _baseLayer;
         private RectangleF _mapBounds;
         private float _cacheDpi;
+        private bool _cacheDark;
         private int _total;
         private int _unknown;
         private int _mappedCount;
@@ -97,6 +98,7 @@ namespace RouteLens
                 Font = UiPalette.Body(8.5f), AccessibleName = "放大地图并查看国家详情", TabIndex = 0 };
             _expandButton.Click += delegate { Action handler = ExpandRequested; if (handler != null) handler(); };
             Controls.Add(_expandButton);
+            _routeTimer.Tick += AdvanceRouteTraffic;
             LayoutExpandButton();
             EnsureMapLoaded();
         }
@@ -109,7 +111,11 @@ namespace RouteLens
 
         public void ZoomIn() { ChangeZoom(_zoom * 1.5f, null, true); }
         public void ZoomOut() { ChangeZoom(_zoom / 1.5f, null, false); }
-        public void ResetZoom() { _centerX = .5f; _centerY = .5f; ChangeZoom(1f, null, false); }
+        public void ResetZoom()
+        {
+            if (_routeMode) FitRoute();
+            else ApplyView(1f, .5f, .5f);
+        }
         public void CenterOnCountry(string code)
         {
             MapCountry country;
@@ -126,7 +132,7 @@ namespace RouteLens
         {
             float next = Math.Max(1f, Math.Min(8f, requested));
             float old = _zoom, oldCenterX = _centerX, oldCenterY = _centerY;
-            if (centerSelected && _selectedCode != null)
+            if (centerSelected && !_routeMode && _selectedCode != null)
             {
                 MapCountry selected;
                 if (SharedMap.TryGetValue(_selectedCode, out selected) && IsMapPosition(selected.Longitude, selected.Latitude))
@@ -159,7 +165,7 @@ namespace RouteLens
         public bool ShowExpandButton
         {
             get { return _showExpandButton; }
-            set { _showExpandButton = value; if (_expandButton != null) _expandButton.Visible = value; Invalidate(); }
+            set { _showExpandButton = value; if (_expandButton != null) _expandButton.Visible = value && !_routeMode; Invalidate(); }
         }
 
         public string SelectedCode { get { return _selectedCode; } }
@@ -226,6 +232,7 @@ namespace RouteLens
             EnsureProjection(graphics.DpiX, graphics.DpiY);
             if (_baseLayer != null) graphics.DrawImageUnscaled(_baseLayer, 0, 0);
             float scale = graphics.DpiX / 96f;
+            if (_routeMode) { DrawRoute(graphics, scale, e.ClipRectangle); return; }
             GraphicsState state = graphics.Save();
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             graphics.SetClip(_mapBounds, CombineMode.Intersect);
@@ -235,7 +242,7 @@ namespace RouteLens
                 if (!_byCode.TryGetValue(countryStat.Code, out country) || !IsMapPosition(country.Source.Longitude, country.Source.Latitude)) continue;
                 bool selected = countryStat.Code == _selectedCode;
                 using (Brush brush = new SolidBrush(selected ? SelectedLandColor : ActiveLandColor)) graphics.FillPath(brush, country.Path);
-                using (Pen pen = new Pen(selected ? Color.FromArgb(76, 134, 194) : Color.FromArgb(150, 188, 220), Math.Max(.65f, .7f * scale)))
+                using (Pen pen = new Pen(Color.FromArgb(selected ? 255 : 135, UiPalette.Accent), Math.Max(.65f, .7f * scale)))
                     graphics.DrawPath(pen, country.Path);
             }
             graphics.Restore(state);
@@ -273,7 +280,7 @@ namespace RouteLens
             {
                 string empty = SharedMap.Count == 0 ? "地图数据未加载" : (_mappedCount > 0 && _zoom > 1f ? "当前视野没有标记 · 拖动地图或重置" : (_total == 0 ? "当前范围暂无可定位的公网目标" : (_unknown > 0 ? "等待国家识别，暂不放置连接标记" : "已识别目标暂缺国家代表点")));
                 Rectangle badge = new Rectangle((Width - S(280, scale)) / 2, (int)_mapBounds.Y + (int)_mapBounds.Height / 2 - S(15, scale), S(280, scale), S(30, scale));
-                UiPaint.RoundRect(graphics, badge, S(8, scale), Color.FromArgb(245, 249, 253), Color.FromArgb(220, 230, 241));
+                UiPaint.RoundRect(graphics, badge, S(8, scale), UiPalette.Canvas, UiPalette.Border);
                 DrawText(graphics, empty, _bodyFont, Rectangle.Inflate(badge, -S(8, scale), 0), UiPalette.Muted, TextFormatFlags.HorizontalCenter);
             }
         }
@@ -288,6 +295,7 @@ namespace RouteLens
         {
             base.OnHandleCreated(e);
             LayoutExpandButton();
+            UpdateRouteTimer();
         }
 
         private void LayoutExpandButton()
@@ -335,10 +343,11 @@ namespace RouteLens
                 RectangleF halo = RectangleF.Inflate(bounds, 4f * scale, 4f * scale);
                 UiPaint.RoundRect(graphics, halo, halo.Height / 2f, Color.FromArgb(selected ? 40 : 25, UiPalette.Accent));
             }
-            UiPaint.RoundRect(graphics, RectangleF.Inflate(bounds, 1.6f * scale, 1.6f * scale), bounds.Height / 2f + 1.6f * scale, Color.White);
-            UiPaint.RoundRect(graphics, bounds, bounds.Height / 2f, active ? Color.FromArgb(20, 79, 155) : UiPalette.Accent);
+            UiPaint.RoundRect(graphics, RectangleF.Inflate(bounds, 1.6f * scale, 1.6f * scale), bounds.Height / 2f + 1.6f * scale, UiPalette.Surface);
+            Color markerColor = !active ? UiPalette.Accent : UiPalette.IsDark ? Color.FromArgb(174, 213, 254) : Color.FromArgb(20, 79, 155);
+            UiPaint.RoundRect(graphics, bounds, bounds.Height / 2f, markerColor);
             if (marker.HasCount)
-                DrawText(graphics, marker.Country.Count.ToString("N0"), _numberFont, Rectangle.Round(bounds), Color.White, TextFormatFlags.HorizontalCenter);
+                DrawText(graphics, marker.Country.Count.ToString("N0"), _numberFont, Rectangle.Round(bounds), UiPalette.AccentInk, TextFormatFlags.HorizontalCenter);
             if (focused)
             {
                 Rectangle ring = Rectangle.Round(RectangleF.Inflate(bounds, 6f * scale, 6f * scale));
@@ -348,10 +357,12 @@ namespace RouteLens
 
         private void EnsureProjection(float dpiX, float dpiY)
         {
-            if (_baseLayer == null || _baseLayer.Width != Math.Max(1, Width) || _baseLayer.Height != Math.Max(1, Height) || Math.Abs(_cacheDpi - dpiX) > .1f)
+            if (_baseLayer == null || _baseLayer.Width != Math.Max(1, Width) || _baseLayer.Height != Math.Max(1, Height) ||
+                Math.Abs(_cacheDpi - dpiX) > .1f || _cacheDark != UiPalette.IsDark)
             {
                 ClearProjection();
                 _cacheDpi = dpiX;
+                _cacheDark = UiPalette.IsDark;
                 float scale = dpiX / 96f;
                 float availableWidth = Math.Max(1, Width - S(60, scale));
                 float availableHeight = Math.Max(1, Height - S(99, scale));
@@ -389,8 +400,9 @@ namespace RouteLens
                         }
                 }
                 _markersDirty = true;
+                _routeGeometryDirty = true;
             }
-            if (_markersDirty) BuildMarkers(dpiX / 96f);
+            if (_markersDirty && !_routeMode) BuildMarkers(dpiX / 96f);
         }
 
         private void AddProjectedRing(GraphicsPath target, PointF[] polygon)
@@ -499,7 +511,7 @@ namespace RouteLens
 
         private int HitTest(Point point)
         {
-            if (!_mapBounds.Contains(point)) return -1;
+            if (_routeMode || !_mapBounds.Contains(point)) return -1;
             int closest = -1;
             float closestDistance = Single.MaxValue;
             float scale = _cacheDpi > 0 ? _cacheDpi / 96f : 1f;
@@ -613,6 +625,7 @@ namespace RouteLens
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
+            if (_routeMode && e.KeyCode != Keys.Add && e.KeyCode != Keys.Oemplus && e.KeyCode != Keys.Subtract && e.KeyCode != Keys.OemMinus && e.KeyCode != Keys.D0 && e.KeyCode != Keys.NumPad0) return;
             if (e.KeyCode == Keys.Escape)
             {
                 Action<string> handler = CountrySelected;
@@ -669,6 +682,7 @@ namespace RouteLens
 
         private void UpdateAccessibility()
         {
+            if (_routeMode) { UpdateRouteAccessibility(); return; }
             string detail = "";
             if (_focusIndex >= 0 && _focusIndex < _markers.Count)
                 detail = "当前国家 " + _markers[_focusIndex].Country.Name + "，" + _markers[_focusIndex].Country.Count.ToString("N0") + " 条连接。";
@@ -762,6 +776,7 @@ namespace RouteLens
             if (disposing)
             {
                 ClearProjection();
+                _routeTimer.Dispose();
                 _tips.Dispose();
                 _titleFont.Dispose();
                 _bodyFont.Dispose();

@@ -8,9 +8,9 @@ RouteLens is an open-source Windows network monitor for Clash / Mihomo. One moti
 
 ## 下载与运行
 
-v7.2.2 增加空白处拖动整个窗口，并减少重复重绘；保留四边缩放、圆角、分页和行为调查。说明与验证见 [空白拖窗与重绘优化](docs/WINDOW-DRAG-RENDER.md)。实现范围与验证见 [行为调查集成说明](docs/BEHAVIOR-INVESTIGATION.md)、[分页导航](docs/PAGE-NAVIGATION.md) 与 [窗口缩放](docs/WINDOW-CHROME.md)。
+v7.3.0 增加浅色/深色外观、订阅用量和站点流量顶栏、按程序下载提醒，以及选中连接的逐跳地图观察。配色设置保存在当前 Windows 用户的本地应用数据中。说明与验证见 [7.3.0 发布说明](docs/RELEASE-v7.3.0.md)。
 
-需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v7.2.2.zip`，解压后双击 `RouteLens.exe`；也可以下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v7.2.2/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
+需要 **Windows 10/11 和 .NET Framework 4.8**。前往 [最新版本下载页](https://github.com/0d000721inme/RouteLens/releases/latest)，下载 `RouteLens-Windows-v7.3.0.zip`，解压后双击 `RouteLens.exe`；也可以下载 [单文件程序](https://github.com/0d000721inme/RouteLens/releases/download/v7.3.0/RouteLens.exe)。无需 Python、Node.js 或抓包驱动。
 
 保持 Clash / Mihomo 运行，RouteLens 会尝试发现本机控制接口。普通权限可以使用连接、地图和流量视图；DNS 被动捕获需要管理员权限，权限不足时会标注检测受限。
 
@@ -19,12 +19,16 @@ v7.2.2 增加空白处拖动整个窗口，并减少重复重绘；保留四边�
 - **页内导航**：顶部九个入口直接切换主窗口内容，当前页高亮，切换保留筛选、设置草稿和调查备注。支持 `Ctrl+Tab` / `Ctrl+Shift+Tab` 前后翻页，带约 170 毫秒淡入过渡；遵循 Windows 动画偏好。
 
 - **原始连接**：查看内核提供的程序、域名、目标 IP、国家或地区、代理链和命中规则；也可切换到 Windows 系统连接视图。
+- **浅色与深色外观**：在右上角切换，选择保存在当前 Windows 用户的本地应用数据中；转场遵循 Windows 动画偏好。
+- **订阅与今日站点流量**：顶栏显示 Clash 可提供的套餐用量，以及本次运行中可由连续 Clash 采样归因的站点、直连和代理流量。系统连接数据源没有逐连接字节计数。今日明细仅保存在内存，退出程序后清除，不等同于整机或计费数据。
 - **实时流量**：查看 Clash 活动连接的程序排行与速度趋势；另可查看各网卡独立的上下行速度。
 - **历史流量**：可主动开启本机记录，按程序、域名、代理链或最终节点汇总，选择保留 7、30 或 90 天并清除记录。默认不记录历史。
 - **世界地图**：查看目标 IP 的国家分布，在地图详情窗口缩放、拖动，并按国家查看程序和域名排行。
 - **离线国家识别**：内置 DB-IP Country Lite 数据库；支持主动下载更新或导入国家版 CSV / CSV.GZ。无离线结果时可选择是否联网查询。
 - **DNS 检测**：被动观察物理 IPv4 网卡上的明文 DNS 外发；也可以手动启动主动测试，查看测试服务观察到的解析服务器与请求出口。
 - **联网提醒**：可选提醒新程序、新目标地区或 Clash 流量达到设定阈值；默认关闭，仅本次运行有效。
+- **高速下载消息**：可选按程序观察高速下载，在页面消息栏和 Windows 通知中提示；默认关闭。速度阈值只生成待核查线索。
+- **连接路径地图**：从所选连接手动启动本机 ICMP 逐跳探测，显示内核报告的代理链、ICMP 返回跳点和流量方向动画。代理隧道内部路径通常不可见；地图位置为国家代表点，不是精确路由坐标。
 - **持续上传与目标观察**：可选持续上传提醒，帮助发现达到自设条件的活动；区分最近出现过的目标和观察到上传增量的目标，仅覆盖 Clash 已观察连接。
 - **证据与系统变更**：查看本次采样状态和缺口、手动读取已有系统日志，按有效 Sysmon ProcessGuid 查看同一进程的其他已读取事件；可比较 Run 启动项快照，或手动导入本地 Zeek JSON 连接记录。
 - **行为调查**：按程序组观察持续上传，或将选中连接加入调查。记录采样时间、峰值、计速范围、归因限制及目标观察；支持搜索、复核备注和 JSON 导出。自动观察默认关闭，记录仅保留在本次运行内，导出默认隐藏程序路径、目标地址与备注。
@@ -83,6 +87,11 @@ v7.2.2 增加空白处拖动整个窗口，并减少重复重绘；保留四边�
 .\tests\RunInvestigationUiChecks.ps1
 .\tests\RunPageNavigationChecks.ps1
 .\tests\RunPageTransitionChecks.ps1
+.\tests\RunThemeChecks.ps1
+.\tests\RunUsageStripChecks.ps1
+.\tests\RunSubscriptionQuotaChecks.ps1
+.\tests\RunConnectionTraceChecks.ps1
+.\tests\RunWorldMapRouteChecks.ps1
 .\tests\RunWindowChromeChecks.ps1
 .\tests\RunWindowDragChecks.ps1
 .\tests\RunRenderSchedulingChecks.ps1

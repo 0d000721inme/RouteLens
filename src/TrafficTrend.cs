@@ -15,7 +15,7 @@ namespace RouteLens
         private readonly Queue<PointValue> _values = new Queue<PointValue>();
         private readonly Font _label = UiPalette.Body(8.4f);
         private DateTime _lastRecord = DateTime.MinValue;
-        private static readonly Color Upload = Color.FromArgb(38, 139, 137);
+        private static Color Upload { get { return UiPalette.Success; } }
 
         public TrafficTrend()
         {

@@ -31,6 +31,107 @@ namespace RouteLens
         public bool Measured, PositiveUpload;
     }
 
+    public struct DailySiteTrafficEntry
+    {
+        public string Host;
+        public long DownloadBytes, UploadBytes, DirectBytes, ProxyBytes, UnknownBytes;
+        public long TotalBytes { get { return TrafficTracker.AddBytes(DownloadBytes, UploadBytes); } }
+
+        internal void Add(long download, long upload, string route)
+        {
+            DownloadBytes = TrafficTracker.AddBytes(DownloadBytes, download);
+            UploadBytes = TrafficTracker.AddBytes(UploadBytes, upload);
+            long bytes = TrafficTracker.AddBytes(download, upload);
+            if (route == "直连") DirectBytes = TrafficTracker.AddBytes(DirectBytes, bytes);
+            else if (route == "代理") ProxyBytes = TrafficTracker.AddBytes(ProxyBytes, bytes);
+            else UnknownBytes = TrafficTracker.AddBytes(UnknownBytes, bytes);
+        }
+    }
+
+    public sealed class DailySiteTrafficReport
+    {
+        public DateTime Day;
+        public long DownloadBytes, UploadBytes, DirectBytes, ProxyBytes, UnknownBytes, OverflowBytes;
+        public long TotalBytes { get { return TrafficTracker.AddBytes(DownloadBytes, UploadBytes); } }
+        public List<DailySiteTrafficEntry> Sites = new List<DailySiteTrafficEntry>();
+    }
+
+    // Current local day, in memory. Overflow is included in all overall totals.
+    public sealed class DailySiteTraffic
+    {
+        internal const int MaximumSites = 2048;
+        private readonly Dictionary<string, DailySiteTrafficEntry> _sites = new Dictionary<string, DailySiteTrafficEntry>(StringComparer.OrdinalIgnoreCase);
+        private DailySiteTrafficEntry _total;
+        private long _overflowBytes;
+        private DateTime _day, _lastCaptureUtc;
+        private bool _hasBaseline;
+
+        public void Clear()
+        {
+            _sites.Clear(); _total = new DailySiteTrafficEntry(); _overflowBytes = 0; _hasBaseline = false;
+        }
+
+        private void AdvanceDay(DateTime day)
+        {
+            if (day > _day) { Clear(); _day = day; }
+        }
+
+        private static DateTime LocalDay(DateTime time)
+        { return (time.Kind == DateTimeKind.Utc ? time.ToLocalTime() : time).Date; }
+
+        internal bool BeginSnapshot(DateTime previous, DateTime current, out bool countInterval)
+        {
+            countInterval = false;
+            if (current == default(DateTime)) { _hasBaseline = false; return true; }
+            DateTime day = LocalDay(current), utc = current.ToUniversalTime();
+            // Keep the newest accepted baseline when callers replay an older capture.
+            if (day < _day || utc <= _lastCaptureUtc) return false;
+            AdvanceDay(day);
+            countInterval = _hasBaseline && previous != default(DateTime) && previous.ToUniversalTime() == _lastCaptureUtc;
+            _hasBaseline = true; _lastCaptureUtc = utc;
+            return true;
+        }
+
+        internal void Add(ConnectionInfo row, long download, long upload, string route)
+        {
+            if (download == 0 && upload == 0) return;
+            _total.Add(download, upload, route);
+            string host = (row.Host ?? "").Trim().TrimEnd('.');
+            if (host.Length == 0) host = (row.RemoteAddress ?? "").Trim();
+            if (host.Length == 0) host = "目标未提供";
+            DailySiteTrafficEntry entry;
+            if (!_sites.TryGetValue(host, out entry))
+            {
+                if (_sites.Count >= MaximumSites)
+                {
+                    _overflowBytes = TrafficTracker.AddBytes(_overflowBytes, TrafficTracker.AddBytes(download, upload));
+                    return;
+                }
+                entry.Host = host;
+            }
+            entry.Add(download, upload, route); _sites[host] = entry;
+        }
+
+        public DailySiteTrafficReport Read(DateTime now, bool includeSites = true)
+        {
+            DateTime day = LocalDay(now); AdvanceDay(day);
+            if (day != _day) return new DailySiteTrafficReport { Day = day };
+            DailySiteTrafficReport report = new DailySiteTrafficReport { Day = day, DownloadBytes = _total.DownloadBytes,
+                UploadBytes = _total.UploadBytes, DirectBytes = _total.DirectBytes, ProxyBytes = _total.ProxyBytes,
+                UnknownBytes = _total.UnknownBytes, OverflowBytes = _overflowBytes };
+            if (includeSites)
+            {
+                report.Sites.AddRange(_sites.Values);
+                report.Sites.Sort(delegate(DailySiteTrafficEntry a, DailySiteTrafficEntry b)
+                {
+                    int order = b.TotalBytes.CompareTo(a.TotalBytes);
+                    return order != 0 ? order : StringComparer.OrdinalIgnoreCase.Compare(a.Host, b.Host);
+                });
+            }
+            return report;
+        }
+    }
+
     // Retains only the last accepted snapshot. Closing connections leave these totals;
     // this is neither a history store nor an estimate of whole-machine usage.
     public sealed class TrafficTracker
@@ -44,7 +145,7 @@ namespace RouteLens
 
         private sealed class Sample
         {
-            public string Identity;
+            public string Identity, Route;
             public long Download, Upload;
             public bool Counters, Measured;
             public double DownloadRate, UploadRate;
@@ -60,12 +161,18 @@ namespace RouteLens
         }
 
         public void Update(NetworkSnapshot snapshot)
+        { Update(snapshot, null); }
+
+        public void Update(NetworkSnapshot snapshot, DailySiteTraffic daily)
         {
             if (snapshot == null || !snapshot.ClashConnected || !String.IsNullOrWhiteSpace(snapshot.Error) || snapshot.Connections == null)
             {
                 Reset();
                 return;
             }
+            bool countDaily = false;
+            if (daily != null && !daily.BeginSnapshot(_capturedAt, snapshot.CapturedAt, out countDaily) &&
+                _capturedAt != default(DateTime) && snapshot.CapturedAt <= _capturedAt) return;
             string source = Text(snapshot.SourceName) + "\n" + Text(snapshot.ControllerSummary);
             double seconds = (snapshot.CapturedAt - _capturedAt).TotalSeconds;
             bool intervalValid = _available && String.Equals(_source, source, StringComparison.Ordinal) &&
@@ -85,7 +192,7 @@ namespace RouteLens
                 }
                 Sample sample = new Sample
                 {
-                    Identity = Identity(row), Counters = HasCounters(row),
+                    Identity = Identity(row), Route = row.RouteType, Counters = HasCounters(row),
                     Download = Math.Max(0, row.DownloadBytes), Upload = Math.Max(0, row.UploadBytes)
                 };
                 Sample before;
@@ -101,6 +208,17 @@ namespace RouteLens
             }
             // An ambiguous identifier cannot supply a trustworthy future baseline.
             foreach (string id in duplicates) next.Remove(id);
+            if (countDaily && intervalValid)
+            {
+                foreach (ConnectionInfo row in snapshot.Connections)
+                {
+                    Sample current;
+                    if (row == null || row.Id == null || !next.TryGetValue(row.Id, out current) || !current.Measured) continue;
+                    Sample previous = _samples[row.Id];
+                    string route = previous.Route == current.Route ? current.Route : null;
+                    daily.Add(row, current.Download - previous.Download, current.Upload - previous.Upload, route);
+                }
+            }
             _samples = next;
             _capturedAt = snapshot.CapturedAt;
             _receivedAt = Stopwatch.GetTimestamp();
@@ -191,7 +309,7 @@ namespace RouteLens
                 Text(row.DataSource).IndexOf("Mihomo", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static long AddBytes(long total, long amount)
+        internal static long AddBytes(long total, long amount)
         {
             return amount > Int64.MaxValue - total ? Int64.MaxValue : total + Math.Max(0, amount);
         }

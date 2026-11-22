@@ -7,19 +7,158 @@ namespace RouteLens
 {
     public static class UiPalette
     {
-        public static readonly Color Canvas = Color.FromArgb(243, 246, 251);
-        public static readonly Color Surface = Color.White;
-        public static readonly Color Raised = Color.FromArgb(237, 242, 248);
-        public static readonly Color Border = Color.FromArgb(219, 229, 240);
-        public static readonly Color Ink = Color.FromArgb(30, 42, 58);
-        public static readonly Color Muted = Color.FromArgb(91, 106, 127);
-        public static readonly Color Accent = Color.FromArgb(28, 103, 193);
-        public static readonly Color AccentSoft = Color.FromArgb(229, 240, 252);
-        public static readonly Color Warn = Color.FromArgb(154, 106, 37);
+        private enum Tone { Canvas, Surface, Raised, Border, Ink, Muted, Accent, AccentSoft, Warn, WarnSoft, Success, SuccessSoft, Danger }
+
+        private static readonly Color[] Light = {
+            Color.FromArgb(243, 246, 251), Color.White, Color.FromArgb(237, 242, 248), Color.FromArgb(219, 229, 240),
+            Color.FromArgb(30, 42, 58), Color.FromArgb(91, 106, 127), Color.FromArgb(28, 103, 193), Color.FromArgb(229, 240, 252),
+            Color.FromArgb(154, 106, 37), Color.FromArgb(250, 241, 224), Color.FromArgb(22, 115, 96), Color.FromArgb(221, 244, 236), Color.FromArgb(167, 62, 49)
+        };
+        private static readonly Color[] Dark = {
+            Color.FromArgb(22, 26, 29), Color.FromArgb(32, 38, 42), Color.FromArgb(42, 49, 55), Color.FromArgb(61, 72, 81),
+            Color.FromArgb(231, 237, 242), Color.FromArgb(170, 184, 194), Color.FromArgb(134, 189, 255), Color.FromArgb(42, 62, 83),
+            Color.FromArgb(239, 193, 116), Color.FromArgb(72, 55, 34), Color.FromArgb(116, 215, 183), Color.FromArgb(36, 68, 58), Color.FromArgb(255, 158, 146)
+        };
+
+        public static bool IsDark { get; private set; }
+        public static Color Canvas { get { return Get(Tone.Canvas); } }
+        public static Color Surface { get { return Get(Tone.Surface); } }
+        public static Color Raised { get { return Get(Tone.Raised); } }
+        public static Color Border { get { return Get(Tone.Border); } }
+        public static Color Ink { get { return Get(Tone.Ink); } }
+        public static Color Muted { get { return Get(Tone.Muted); } }
+        public static Color Accent { get { return Get(Tone.Accent); } }
+        public static Color AccentSoft { get { return Get(Tone.AccentSoft); } }
+        public static Color Warn { get { return Get(Tone.Warn); } }
+        public static Color WarnSoft { get { return Get(Tone.WarnSoft); } }
+        public static Color Success { get { return Get(Tone.Success); } }
+        public static Color SuccessSoft { get { return Get(Tone.SuccessSoft); } }
+        public static Color Danger { get { return Get(Tone.Danger); } }
+        public static Color AccentInk { get { return IsDark ? Color.FromArgb(16, 35, 56) : Color.White; } }
+
+        private static Color Get(Tone tone) { return (IsDark ? Dark : Light)[(int)tone]; }
+
+        public static void SetMode(bool isDark, Control root)
+        {
+            if (IsDark == isDark) return;
+            Color[] oldPalette = IsDark ? Dark : Light;
+            IsDark = isDark;
+            if (root != null) Apply(root, oldPalette, IsDark ? Dark : Light);
+        }
+
+        private static Color Translate(Color value, Color[] oldPalette, Color[] newPalette)
+        {
+            if (value.IsEmpty) return value;
+            if (value == SystemColors.Window) return newPalette[(int)Tone.Surface];
+            if (value == SystemColors.ControlText || value == SystemColors.WindowText) return newPalette[(int)Tone.Ink];
+            int rgb = value.ToArgb();
+            for (int i = 0; i < oldPalette.Length; i++)
+                if (oldPalette[i].ToArgb() == rgb) return newPalette[i];
+            return value;
+        }
+
+        private static void Apply(Control control, Color[] oldPalette, Color[] newPalette)
+        {
+            // Translate children first so inherited colors still read from the previous palette.
+            foreach (Control child in control.Controls) Apply(child, oldPalette, newPalette);
+            Color back = Translate(control.BackColor, oldPalette, newPalette);
+            Color fore = Translate(control.ForeColor, oldPalette, newPalette);
+            if (back != control.BackColor) control.BackColor = back;
+            if (fore != control.ForeColor) control.ForeColor = fore;
+            if (control.ContextMenuStrip != null) ApplyToolStrip(control.ContextMenuStrip);
+            RoundedPanel panel = control as RoundedPanel;
+            if (panel != null)
+            {
+                panel.SurfaceColor = Translate(panel.SurfaceColor, oldPalette, newPalette);
+                panel.BorderColor = Translate(panel.BorderColor, oldPalette, newPalette);
+            }
+            DataGridView grid = control as DataGridView;
+            if (grid != null)
+            {
+                grid.BackgroundColor = Translate(grid.BackgroundColor, oldPalette, newPalette);
+                grid.GridColor = Translate(grid.GridColor, oldPalette, newPalette);
+                grid.ColumnHeadersDefaultCellStyle = TranslateCellStyle(grid.ColumnHeadersDefaultCellStyle, oldPalette, newPalette);
+                grid.DefaultCellStyle = TranslateCellStyle(grid.DefaultCellStyle, oldPalette, newPalette);
+                grid.RowsDefaultCellStyle = TranslateCellStyle(grid.RowsDefaultCellStyle, oldPalette, newPalette);
+                grid.AlternatingRowsDefaultCellStyle = TranslateCellStyle(grid.AlternatingRowsDefaultCellStyle, oldPalette, newPalette);
+                foreach (DataGridViewColumn column in grid.Columns)
+                    if (column.HasDefaultCellStyle) column.DefaultCellStyle = TranslateCellStyle(column.DefaultCellStyle, oldPalette, newPalette);
+            }
+            control.Invalidate();
+        }
+
+        private static void ApplyToolStrip(ContextMenuStrip menu)
+        {
+            menu.BackColor = Surface; menu.ForeColor = Ink;
+            menu.Renderer = new ToolStripProfessionalRenderer(new PaletteToolStripColors());
+            ApplyToolStripItems(menu.Items);
+        }
+
+        private static void ApplyToolStripItems(ToolStripItemCollection items)
+        {
+            foreach (ToolStripItem item in items)
+            {
+                item.BackColor = Surface; item.ForeColor = Ink;
+                ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+                if (menuItem != null && menuItem.DropDownItems.Count > 0)
+                    ApplyToolStripItems(menuItem.DropDownItems);
+            }
+        }
+
+        private sealed class PaletteToolStripColors : ProfessionalColorTable
+        {
+            public override Color ToolStripDropDownBackground { get { return Surface; } }
+            public override Color ImageMarginGradientBegin { get { return Surface; } }
+            public override Color ImageMarginGradientMiddle { get { return Surface; } }
+            public override Color ImageMarginGradientEnd { get { return Surface; } }
+            public override Color MenuBorder { get { return Border; } }
+            public override Color MenuItemBorder { get { return Border; } }
+            public override Color MenuItemSelected { get { return Raised; } }
+            public override Color MenuItemSelectedGradientBegin { get { return Raised; } }
+            public override Color MenuItemSelectedGradientEnd { get { return Raised; } }
+            public override Color MenuItemPressedGradientBegin { get { return AccentSoft; } }
+            public override Color MenuItemPressedGradientEnd { get { return AccentSoft; } }
+        }
+
+        private static DataGridViewCellStyle TranslateCellStyle(DataGridViewCellStyle style, Color[] oldPalette, Color[] newPalette)
+        {
+            style = style.Clone();
+            style.BackColor = Translate(style.BackColor, oldPalette, newPalette);
+            style.ForeColor = Translate(style.ForeColor, oldPalette, newPalette);
+            style.SelectionBackColor = Translate(style.SelectionBackColor, oldPalette, newPalette);
+            style.SelectionForeColor = Translate(style.SelectionForeColor, oldPalette, newPalette);
+            return style;
+        }
 
         public static Font Body(float size) { return new Font("Microsoft YaHei UI", size, FontStyle.Regular, GraphicsUnit.Point); }
         public static Font Mono(float size) { return new Font("Consolas", size, FontStyle.Regular, GraphicsUnit.Point); }
         public static Font Heading(float size) { return new Font("Segoe UI Semibold", size, FontStyle.Regular, GraphicsUnit.Point); }
+    }
+
+    public sealed class ModernCombo : ComboBox
+    {
+        public ModernCombo()
+        {
+            DrawMode = DrawMode.OwnerDrawFixed;
+            FlatStyle = FlatStyle.Flat;
+            BackColor = UiPalette.Surface;
+            ForeColor = UiPalette.Ink;
+        }
+
+        protected override void OnDrawItem(DrawItemEventArgs e)
+        {
+            if (e.Bounds.IsEmpty) return;
+            bool item = (e.State & DrawItemState.ComboBoxEdit) == 0;
+            bool selected = item && (e.State & DrawItemState.Selected) != 0;
+            using (Brush background = new SolidBrush(selected ? UiPalette.AccentSoft : UiPalette.Surface))
+                e.Graphics.FillRectangle(background, e.Bounds);
+            if (e.Index >= 0 && e.Index < Items.Count)
+            {
+                Rectangle text = Rectangle.Inflate(e.Bounds, -3, 0);
+                TextRenderer.DrawText(e.Graphics, GetItemText(Items[e.Index]), Font, text, Enabled ? UiPalette.Ink : UiPalette.Muted,
+                    UiPaint.TextFlags | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+            }
+        }
     }
 
     public static class UiPaint
@@ -117,6 +256,19 @@ namespace RouteLens
                         using (Brush dot = new SolidBrush(color)) graphics.FillEllipse(dot, 11.2f, 16, 1.6f, 1.6f); break;
                     case "filter":
                         graphics.DrawLine(pen, 4, 6, 20, 6); graphics.DrawLine(pen, 7, 12, 17, 12); graphics.DrawLine(pen, 10, 18, 14, 18); break;
+                    case "sun":
+                        graphics.DrawEllipse(pen, 8, 8, 8, 8);
+                        for (int i = 0; i < 8; i++)
+                        {
+                            double angle = i * Math.PI / 4;
+                            float x = (float)Math.Cos(angle), y = (float)Math.Sin(angle);
+                            graphics.DrawLine(pen, 12 + 7 * x, 12 + 7 * y, 12 + 9 * x, 12 + 9 * y);
+                        }
+                        break;
+                    case "moon":
+                        graphics.DrawArc(pen, 3.5f, 3.5f, 17, 17, -35, 265);
+                        graphics.DrawArc(pen, 8, 0.5f, 16, 16, 28, 108);
+                        break;
                 }
             }
             graphics.Restore(state);
@@ -193,19 +345,20 @@ namespace RouteLens
             Color text;
             if (!Enabled)
             {
-                fill = Quiet ? Color.Transparent : Color.FromArgb(239, 242, 244);
+                fill = Quiet ? Color.Transparent : UiPalette.Raised;
                 outline = Quiet ? Color.Transparent : UiPalette.Border;
-                text = Color.FromArgb(142, 151, 159);
+                text = UiPalette.Muted;
             }
             else if (Primary)
             {
-                fill = pressed ? Color.FromArgb(18, 76, 151) : (hovered ? Color.FromArgb(24, 91, 175) : UiPalette.Accent);
-                outline = fill; text = Color.White;
+                fill = pressed ? Color.FromArgb(UiPalette.IsDark ? 159 : 18, UiPalette.IsDark ? 201 : 76, UiPalette.IsDark ? 247 : 151)
+                    : hovered ? Color.FromArgb(UiPalette.IsDark ? 145 : 24, UiPalette.IsDark ? 196 : 91, UiPalette.IsDark ? 254 : 175) : UiPalette.Accent;
+                outline = fill; text = UiPalette.AccentInk;
             }
             else
             {
-                fill = pressed ? Color.FromArgb(226, 233, 236) : (hovered ? Color.FromArgb(237, 242, 244) : (Quiet ? Color.Transparent : UiPalette.Surface));
-                outline = Quiet ? Color.Transparent : (hovered ? Color.FromArgb(198, 209, 216) : UiPalette.Border);
+                fill = pressed ? UiPalette.Border : hovered ? UiPalette.Raised : Quiet ? Color.Transparent : UiPalette.Surface;
+                outline = Quiet ? Color.Transparent : UiPalette.Border;
                 text = ForeColor;
             }
             UiPaint.RoundRect(graphics, new RectangleF(0.5f * scale, 0.5f * scale, Math.Max(0, Width - scale), Math.Max(0, Height - scale)), CornerRadius * scale, fill, outline);
@@ -227,7 +380,7 @@ namespace RouteLens
                 TextRenderer.DrawText(graphics, Text, Font, new Rectangle(x, content.Top, textWidth + 1, content.Height), text, UiPaint.TextFlags | TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
             if (Focused && ShowFocusCues && Enabled)
             {
-                Color focus = Primary ? Color.FromArgb(218, 234, 255) : UiPalette.Accent;
+                Color focus = Primary ? UiPalette.AccentInk : UiPalette.Accent;
                 using (Pen pen = new Pen(focus, 1.2f * scale))
                 using (GraphicsPath path = UiPaint.RoundedPath(new RectangleF(3 * scale, 3 * scale, Math.Max(0, Width - 6 * scale), Math.Max(0, Height - 6 * scale)), Math.Max(1, CornerRadius - 2) * scale))
                 {
@@ -271,13 +424,13 @@ namespace RouteLens
             float scale = graphics.DpiX / 96f;
             RectangleF box = new RectangleF(3 * scale, (Height - 16 * scale) / 2, 16 * scale, 16 * scale);
             bool marked = CheckState != CheckState.Unchecked;
-            Color fill = !Enabled ? Color.FromArgb(236, 240, 242) : (marked ? UiPalette.Accent : UiPalette.Surface);
-            Color outline = !Enabled ? UiPalette.Border : (marked || hovered ? UiPalette.Accent : Color.FromArgb(126, 140, 150));
+            Color fill = !Enabled ? UiPalette.Raised : (marked ? UiPalette.Accent : UiPalette.Surface);
+            Color outline = !Enabled ? UiPalette.Border : (marked || hovered ? UiPalette.Accent : UiPalette.Muted);
             UiPaint.RoundRect(graphics, box, 4 * scale, fill, outline);
             if (marked)
             {
                 GraphicsState state = graphics.Save(); graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using (Pen pen = new Pen(Enabled ? Color.White : Color.FromArgb(157, 169, 177), 1.75f * scale))
+                using (Pen pen = new Pen(Enabled ? UiPalette.AccentInk : UiPalette.Muted, 1.75f * scale))
                 {
                     pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; pen.LineJoin = LineJoin.Round;
                     if (CheckState == CheckState.Indeterminate) graphics.DrawLine(pen, box.X + 4 * scale, box.Y + 8 * scale, box.X + 12 * scale, box.Y + 8 * scale);
@@ -307,31 +460,4 @@ namespace RouteLens
         protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
     }
 
-    public sealed class BrandMark : Control
-    {
-        public BrandMark()
-        {
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
-            BackColor = Color.Transparent; Size = new Size(38, 38); TabStop = false; AccessibleName = "RouteLens";
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics graphics = e.Graphics;
-            GraphicsState state = graphics.Save();
-            graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            float side = Math.Min(Width, Height);
-            graphics.TranslateTransform((Width - side) / 2, (Height - side) / 2);
-            graphics.ScaleTransform(side / 40f, side / 40f);
-            UiPaint.RoundRect(graphics, new RectangleF(0.5f, 0.5f, 39, 39), 11, UiPalette.AccentSoft);
-            using (Pen pen = new Pen(UiPalette.Accent, 2.4f))
-            {
-                pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; pen.LineJoin = LineJoin.Round;
-                graphics.DrawArc(pen, 8, 8, 24, 24, 7, 303);
-                graphics.DrawLines(pen, new PointF[] { new PointF(13, 26), new PointF(18, 26), new PointF(25, 15), new PointF(30, 15) });
-            }
-            using (Brush brush = new SolidBrush(UiPalette.Accent)) { graphics.FillEllipse(brush, 10.7f, 23.7f, 4.6f, 4.6f); graphics.FillEllipse(brush, 27.7f, 12.7f, 4.6f, 4.6f); }
-            graphics.Restore(state);
-        }
-    }
 }

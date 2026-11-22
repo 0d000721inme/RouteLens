@@ -50,7 +50,7 @@ namespace RouteLens
             filters.Controls.Add(InlineLabel("时间", 45)); _period = Choice(118, "今日", "近 7 天", "近 30 天", "近 90 天"); filters.Controls.Add(_period);
             filters.Controls.Add(InlineLabel("查看", 45)); _dimension = Choice(118, "程序", "域名", "代理链", "最终节点"); filters.Controls.Add(_dimension);
             filters.Controls.Add(InlineLabel("筛选", 45));
-            _search = new TextBox { Font = UiPalette.Body(9.5f), Width = 202, Margin = new Padding(0, 7, 12, 0), AccessibleName = "筛选历史排行" }; filters.Controls.Add(_search);
+            _search = new TextBox { BackColor = UiPalette.Surface, ForeColor = UiPalette.Ink, Font = UiPalette.Body(9.5f), Width = 202, Margin = new Padding(0, 7, 12, 0), AccessibleName = "筛选历史排行" }; filters.Controls.Add(_search);
             root.Controls.Add(filters, 0, 3);
 
             FlowLayoutPanel settings = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0), WrapContents = false };
@@ -68,7 +68,7 @@ namespace RouteLens
                 AllowUserToResizeRows = false, RowHeadersVisible = false, ReadOnly = true, MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, EnableHeadersVisualStyles = false, ColumnHeadersHeight = 38,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing, CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
-                ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None, GridColor = Color.FromArgb(238, 241, 243), AccessibleName = "历史流量排行" };
+                ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None, GridColor = UiPalette.Border, AccessibleName = "历史流量排行" };
             _grid.RowTemplate.Height = 40;
             _grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = UiPalette.Raised, ForeColor = UiPalette.Muted, Font = UiPalette.Body(8.8f), SelectionBackColor = UiPalette.Raised, SelectionForeColor = UiPalette.Ink, Padding = new Padding(8, 0, 0, 0) };
             _grid.DefaultCellStyle = new DataGridViewCellStyle { BackColor = UiPalette.Surface, ForeColor = UiPalette.Ink, SelectionBackColor = UiPalette.AccentSoft, SelectionForeColor = UiPalette.Ink, Font = UiPalette.Body(9.5f), Padding = new Padding(8, 0, 0, 0), NullValue = "—" };
@@ -110,7 +110,7 @@ namespace RouteLens
         { return new Label { Text = text, Width = width, Height = 34, Margin = new Padding(0, 3, 0, 0), Font = UiPalette.Body(9), ForeColor = UiPalette.Muted, TextAlign = ContentAlignment.MiddleLeft }; }
         private static ComboBox Choice(int width, params string[] options)
         {
-            ComboBox value = new ComboBox { Width = width, Height = 32, Margin = new Padding(0, 5, 13, 0), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Font = UiPalette.Body(9.5f) };
+            ComboBox value = new ModernCombo { Width = width, Height = 32, Margin = new Padding(0, 5, 13, 0), DropDownStyle = ComboBoxStyle.DropDownList, Font = UiPalette.Body(9.5f) };
             value.Items.AddRange(options); value.SelectedIndex = 0; return value;
         }
         private static Control Metric(string name, Label value, string caption)

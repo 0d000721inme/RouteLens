@@ -4,6 +4,8 @@ RouteLens 的 MIT 许可证适用于本项目源码；下列外部数据、图�
 
 ## 开源项目参考和移植
 
+- 连接路径探测移植自 TraceMe 的 `IcmpProber`，沿用按 TTL 发送 ICMP 回显、计时及解释回复状态的逻辑，改为对选中 IP 依序执行单次追踪。Copyright (c) 2026 Sayed Saeed。[固定版本源码](https://github.com/sa3oodi/TraceMe/blob/df45202940161a01068d94c5f41071489bff6930/src/Engine/Probes.cs) · [MIT 许可证](third_party/licenses/TraceMe-MIT.txt)
+
 - [Mihomo Traffic Ledger](https://github.com/severin-ye/mihomo-traffic-ledger)：桌面界面的分组导航及统计布局参考并改写其 MIT 许可的界面设计。该项目由 Clash Traffic Monitor 衍生，保留两项上游版权；完整许可见 [mihomo-traffic-ledger-MIT.txt](third_party/licenses/mihomo-traffic-ledger-MIT.txt)。
 - [DNS Leak Test](https://github.com/macvk/dnsleaktest)：主动 DNS 解析器测试参考其 MIT 许可的测试流程；完整许可见 [dnsleaktest-MIT.txt](third_party/licenses/dnsleaktest-MIT.txt)。
 

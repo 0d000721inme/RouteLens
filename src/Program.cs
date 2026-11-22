@@ -11,6 +11,7 @@ namespace RouteLens
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            UiPalette.SetMode(ThemePreference.Read(ThemePreference.PathInApp), null);
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += delegate(object sender, System.Threading.ThreadExceptionEventArgs e)
             {

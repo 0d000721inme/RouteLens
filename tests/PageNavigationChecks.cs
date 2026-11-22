@@ -62,6 +62,9 @@ internal static class PageNavigationChecks
     }
     [STAThread] private static int Main()
     {
+        string originalThemePath = ThemePreference.PathInApp;
+        string temporaryThemePath = Path.Combine(Path.GetTempPath(), "RouteLens-page-theme-" + Guid.NewGuid().ToString("N") + ".txt");
+        ThemePreference.PathInApp = temporaryThemePath;
         try
         {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -75,8 +78,17 @@ internal static class PageNavigationChecks
                     EventHandlerList events = (EventHandlerList)typeof(Component).GetProperty("Events", Private).GetValue(main, null);
                     object eventKey = shownKey.GetValue(null); events.RemoveHandler(eventKey, events[eventKey]);
                     Field<DnsLeakMonitor>(main, "_dns").Dispose(); Field<CheckBox>(main, "_online").Checked = false;
+                    main.SetSubscriptionQuotaProviderForTest(delegate
+                    {
+                        return new[] { new SubscriptionQuota { Id = "fixture", Name = "Fixture plan", Source = "Synthetic",
+                            IsCurrent = true, UploadBytes = 4096, DownloadBytes = 12288, TotalBytes = 1048576 } };
+                    });
                     main.Text = "RouteLens 页面检查 · 虚构数据"; main.StartPosition = FormStartPosition.Manual; main.Location = new Point(20, 20);
                     main.Show(); Pump(30);
+                    ThemeTransition visualTransition = Field<ThemeTransition>(main, "_themeTransition");
+                    visualTransition.Play(main, true);
+                    Check(visualTransition.IsRunning, "Main-form frame capture did not start");
+                    visualTransition.Stop();
                     Check(Field<string>(main, "_activePage") == "connections", "Initial page must remain connections");
                     InvestigationMonitor monitor = Field<InvestigationMonitor>(main, "_investigation"); monitor.Configure(true, 1048576, 2);
                     for (int i = 0; i <= 4; i++) main.SetSnapshotForTest(Snapshot(i));
@@ -100,7 +112,10 @@ internal static class PageNavigationChecks
                     Dictionary<string, Form> pages = Field<Dictionary<string, Form>>(main, "_pages");
                     Check(pages.Count == 8, "Each feature page should be cached once");
                     InvestigationDialog investigation = (InvestigationDialog)pages["investigation"];
-                    string caseId = monitor.Snapshot()[0].Id;
+                    NetworkSnapshot capture = Snapshot(4);
+                    string caseId = monitor.CaptureConnection(capture, capture.Connections[0]).Id;
+                    Navigate(main, "连接"); Navigate(main, "行为调查");
+                    investigation.SelectRecord(caseId);
                     Field<TextBox>(investigation, "_note").Text = "未保存的页面切换备注";
                     Field<ComboBox>(investigation, "_review").SelectedIndex = 1;
                     Field<TextBox>(investigation, "_search").Text = "页面示例";
@@ -134,6 +149,24 @@ internal static class PageNavigationChecks
                     SendCommand(main, System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Shift | System.Windows.Forms.Keys.Tab);
                     Check(Field<string>(main, "_activePage") == "investigation", "Ctrl+Shift+Tab did not return to investigation");
                     Navigate(main, "实时流量"); Save(main, "pages-traffic-default.png");
+                    ThemeToggle theme = main.Controls.Find("themeToggle", true).OfType<ThemeToggle>().Single();
+                    theme.PerformClick();
+                    Check(UiPalette.IsDark && ThemePreference.Read(temporaryThemePath), "Main-window theme toggle did not persist dark mode");
+                    if (PageTransition.AnimationsEnabled)
+                        Check(Field<ThemeTransition>(main, "_themeTransition").IsRunning, "Main-window theme toggle did not start its transition: Visible=" +
+                            Field<ThemeTransition>(main, "_themeTransition").Visible + ", Bounds=" + Field<ThemeTransition>(main, "_themeTransition").Bounds);
+                    Pump(230);
+                    Check(Field<TextBox>(main, "_search").BackColor == UiPalette.Surface,
+                        "Main search field retained old theme color: " + Field<TextBox>(main, "_search").BackColor);
+                    Check(main.BackColor == UiPalette.Canvas && pages.Values.All(page => page.BackColor == UiPalette.Canvas),
+                        "Theme switch did not cover all cached pages");
+                    Navigate(main, "连接"); Save(main, "theme-connections-dark.png");
+                    Navigate(main, "世界地图"); Save(main, "theme-map-dark.png");
+                    Navigate(main, "行为调查"); Save(main, "theme-investigation-dark.png");
+                    theme.PerformClick(); Pump(230);
+                    Check(!UiPalette.IsDark && !ThemePreference.Read(temporaryThemePath), "Main-window theme toggle did not persist light mode");
+                    Check(main.BackColor == UiPalette.Canvas && pages.Values.All(page => page.BackColor == UiPalette.Canvas),
+                        "Switching back did not restore all cached pages");
                     main.Size = new Size(1040, 720); Pump(30);
                     for (int i = 0; i < Labels.Length; i++) { Navigate(main, Labels[i]); CheckLayout(main, Labels[i]); }
                     Save(main, "pages-investigation-minimum.png");
@@ -150,5 +183,10 @@ internal static class PageNavigationChecks
             Console.WriteLine("PASS " + checks + " embedded-page navigation checks; synthetic data only, live collectors disabled."); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+        finally
+        {
+            ThemePreference.PathInApp = originalThemePath;
+            if (File.Exists(temporaryThemePath)) File.Delete(temporaryThemePath);
+        }
     }
 }

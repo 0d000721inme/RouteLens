@@ -8,9 +8,79 @@ internal static class ActivityAlertsChecks
     private static int checks;
     [STAThread] private static int Main()
     {
-        try { Run(); SustainedUpload(); Console.WriteLine("PASS " + checks + " session alert checks; fictional data only, no network or disk history."); return 0; }
+        try { Run(); SustainedUpload(); ProgramDownloads(); Console.WriteLine("PASS " + checks + " session alert checks; fictional data only, no network or disk history."); return 0; }
         catch (Exception ex) { Console.Error.WriteLine("FAIL " + ex.Message); return 1; }
     }
+    private const long MiB = 1024 * 1024;
+    private static ConnectionInfo Download(string id, string name, long bytes)
+    { return Row(id, @"C:\Private\" + name, name, 42, "192.0.2.1", bytes); }
+
+    private static void ProgramDownloads()
+    {
+        DateTime start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), clock = start;
+        ActivityAlerts alerts = new ActivityAlerts(delegate { return clock; });
+        List<string> events = new List<string>(); alerts.Alert += events.Add;
+        Check(!alerts.ProgramDownloadEnabled && alerts.ProgramDownloadBytesPerSecond == 10 * MiB && alerts.ProgramDownloadSeconds == 5, "Download defaults incorrect");
+        alerts.Enabled = true; alerts.ProgramDownloadEnabled = true;
+        alerts.ProgramDownloadBytesPerSecond = 2 * MiB; alerts.ProgramDownloadSeconds = 3;
+
+        // A has two connections. B is initially below threshold, and the unnamed
+        // group has heavy traffic throughout. All three start with old totals.
+        Action<int, int, int, string> sample = delegate(int second, int aBytesMiB, int bBytesMiB, string aName)
+        {
+            ConnectionInfo unknown = Row("u", null, "未识别程序", 0, "192.0.2.1", (100 + second * 20L) * MiB);
+            alerts.Update(Snapshot(start.AddSeconds(second), "Clash", Download("a1", aName, (70 + aBytesMiB) * MiB),
+                Download("a2", aName, (40 + aBytesMiB) * MiB), Download("b", "b.exe", (10 + bBytesMiB) * MiB), unknown), null);
+        };
+        sample(0, 0, 0, "a.exe"); sample(1, 1, 1, "a.exe");
+        Check(events.Count == 0, "Download fired on baseline or before duration");
+        sample(3, 5, 3, "a.exe");
+        Check(events.Count == 1 && events[0].Contains("a.exe") && events[0].Contains("3 秒") &&
+            events[0].Contains("3.33 MiB/s") && events[0].Contains("共 10 MiB"), "Per-program download totals, weighted rate or duration incorrect");
+        Check(!events[0].Contains("Private") && !events[0].Contains("192.0.2") && !events[0].Contains("example.test"), "Private target or path in download notification");
+        sample(6, 8, 9, "A.EXE");
+        Check(events.Count == 2 && events[1].Contains("b.exe"), "Per-program cooldown or independent attribution failed");
+        clock = start.AddMinutes(5); sample(7, 9, 11, "A.EXE");
+        Check(events.Count == 4, "Programs did not rearm after cooldown");
+
+        foreach (string reason in new[] { "missing counter", "counter rollback", "pause", "gap", "Windows", "disappeared", "slow", "controller" })
+            CheckDownloadBreak(start, reason);
+        bool rejected = false; try { alerts.ProgramDownloadBytesPerSecond = Double.NaN; } catch (ArgumentOutOfRangeException) { rejected = true; }
+        Check(rejected, "Invalid download threshold accepted");
+        rejected = false; try { alerts.ProgramDownloadSeconds = Double.PositiveInfinity; } catch (ArgumentOutOfRangeException) { rejected = true; }
+        Check(rejected, "Invalid download duration accepted");
+    }
+
+    private static void CheckDownloadBreak(DateTime start, string reason)
+    {
+        ActivityAlerts alerts = new ActivityAlerts(delegate { return start; }) { Enabled = true, ProgramDownloadEnabled = true,
+            ProgramDownloadBytesPerSecond = MiB, ProgramDownloadSeconds = 3 };
+        List<string> events = new List<string>(); alerts.Alert += events.Add;
+        Action<int> sample = delegate(int second)
+        { alerts.Update(Snapshot(start.AddSeconds(second), "Clash", Download("a", "app.exe", (10L + second) * MiB)), null); };
+        sample(0); sample(1); sample(2);
+        int next = reason == "gap" ? 12 : 3;
+        ConnectionInfo a = Download("a", "app.exe", (10L + next) * MiB);
+        NetworkSnapshot interruption = Snapshot(start.AddSeconds(next), "Clash", a);
+        switch (reason)
+        {
+            case "missing counter":
+                ConnectionInfo missing = Download("new", "app.exe", 0); missing.HasTrafficCounters = false;
+                interruption.Connections.Add(missing); break;
+            case "counter rollback": a.DownloadBytes = 0; break;
+            case "pause": alerts.ResetBaseline(); break;
+            case "Windows": interruption.SourceName = "Windows 系统连接"; interruption.ClashConnected = false; break;
+            case "disappeared": interruption.Connections.Clear(); break;
+            case "slow": a.DownloadBytes = 12 * MiB; break;
+            case "controller": interruption.ControllerSummary = "other"; break;
+        }
+        alerts.Update(interruption, null);
+        sample(next + 1); sample(next + 2);
+        Check(events.Count == 0, "Download counted across interruption: " + reason);
+        sample(next + 3); sample(next + 4);
+        Check(events.Count == 1, "Download failed to recover after interruption: " + reason);
+    }
+
     private static void SustainedUpload()
     {
         DateTime at = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
